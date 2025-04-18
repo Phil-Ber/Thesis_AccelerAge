@@ -1,0 +1,108 @@
+---
+title: "Pen AccelerAge"
+author: "Philippe Berends, 3972003"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Simulation
+
+```{r}
+################################################################
+#### Parameters
+################################################################
+
+a <- exp(-9)
+b <- 0.085
+sigma <- 1/b # canonical parametrization
+tau <- a/b # canonical parametrization
+
+followup = 20
+M <- 2 # number of predictors (all standard normally distributed)
+betas <- c(0.05, 0.05) # vector of beta's (should be of length M)
+
+N_pop <- 1e5 # population size (from which lifetable is determined)
+n_obs <- 5e3 # number of observations 
+
+################################################################
+#### Create lifetable for population
+################################################################
+
+X <- matrix( rnorm(N_pop*M,mean=0,sd=1), N_pop, M) # matrix of predictors 
+
+t <- vector(length = N_pop)                                                     
+for (i in 1:N_pop){
+  t[i] <- rgompertz_aft(1, sigma = sigma, tau = tau, linpred = sum(betas * X[i,])) # vector of ages-of-death
+}
+
+lifetable_pop <- as.data.frame(cbind(X, t))
+lifetable_pop <- lifetable_pop[order(lifetable_pop$t),]
+
+mrl <- vector(length = N_pop)
+for (j in 1:N_pop){
+  mrl[j] <- mean(lifetable_pop$t[j:N_pop]) - lifetable_pop$t[j]
+}
+
+lifetable_pop$mrl <- mrl
+
+# smoothen 
+fitsmooth <- scam(mrl ~ s(t, bs = "mpd"), data = lifetable_pop)
+xx <- seq(0,max(lifetable_pop$t), by = 0.1)
+lt <- as.data.frame(cbind(t = xx, mrl =  predict(fitsmooth, data.frame(t=xx))))
+
+################################################################
+#### Create data set 
+################################################################
+
+n_gen <- 2 * n_obs # twice as many to ensure I generate enough, because for some T < C => not observed
+
+X <- as.data.frame(matrix( rnorm(n_gen*M,mean=0,sd=1), n_gen, M))
+colnames(X) <- c("x1", "x2")
+age_start <- runif(n_gen, 20, 80)
+linpred <- rowSums(sweep(X, 2, betas, "*"))
+
+# Get age of death
+age_death <- vector(length = n_gen)
+for (i in 1:n_gen){
+  age_death[i] <- rgompertz_aft(1, sigma = sigma, linpred = linpred[i], tau = tau)
+}
+
+# Remove observations that are left-truncated
+indx_obs <- which(age_start < age_death)[1:n_obs]  # [1:n_obs[k]] to obtain the intended sample size 
+df_sim <- as.data.frame(cbind(X, age_death, age_start, linpred))[indx_obs,]
+
+# Get mean residual life
+for (i in 1:nrow(df_sim)){
+  mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim$age_start[i] * exp(df_sim$linpred[i])), 
+                         upper=Inf, a = a, b = b)$value
+  s_cond <-  gomp_baseline_surv(df_sim$age_start[i] * exp(df_sim$linpred[i]), a = a, b = b) 
+  df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-df_sim$linpred[i])
+}
+
+# Get biological age (via population lifetable)
+for (i in 1:nrow(df_sim)){
+  df_sim$b_age[i] <- lt$t[ which.min(abs(lt$mrl - df_sim$mrl[i])) ]
+}
+
+# Add censoring 
+df_sim$yrs_rem <- df_sim$age_death - df_sim$age_start
+wh <- which(df_sim$yrs_rem > followup) # censored
+df_sim$status <- 1
+df_sim$status[wh] <- 0
+df_sim$follow_up_time <- df_sim$yrs_rem
+df_sim$follow_up_time[wh] <- followup
+df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
+```
+
+
+# Fitting AFT
+
+```{r}
+
+```
