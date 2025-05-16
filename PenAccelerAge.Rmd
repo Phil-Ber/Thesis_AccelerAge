@@ -1,0 +1,118 @@
+---
+title: "Penalized AccelerAge"
+author: "Philippe Berends, 3972003"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r}
+library(survival)
+library(scam)
+library(glue)
+library(psbcGroup)
+library(tidyverse)
+# Load custom functions
+source("R/bioage_estimate_median.R")
+source("R/gompertz_draw.R")
+source("R/weibull_draw.R")
+```
+
+
+```{r}
+################################################################
+#### Create data set 
+################################################################
+gen_data <- function(
+  method     = c("independent","grouped"),  # which X‑generation scheme
+  M,                                        # number of predictors
+  n_obs,                                    # number of *observed* subjects
+  a      = exp(-9),                         # Gompertz baseline param
+  b      = 0.085,                           # Gompertz baseline param
+  followup = 20,                            # maximum follow‑up time
+  N_pop   = 1e5,                            # pop. size for the lifetable
+  G       = 3,                              # number of groups (for grouped)
+  gsize   = 5,                              # group size (for grouped)
+  seednr = 123                              # seed for reproducibility
+) {
+  # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
+  ################################################################
+  #### Parameters
+  ################################################################
+  
+  set.seed(seednr)
+  sigma <- 1/b # canonical parametrization
+  tau <- a/b # canonical parametrization
+  betas = runif(M,-2,2)
+  
+  # beta0 in a group same value, add epsilon distr
+  
+  # betas <- c(0.05, 0.05) # vector of beta's (should be of length M)
+  
+
+  
+  
+  ################################################################
+  #### Create data set 
+  ################################################################
+  n_gen <- 2 * n_obs # twice as many to ensure I generate enough, because for some T < C => not observed
+  if (method == "independent") {
+    X <- as.data.frame(matrix( rnorm(n_gen*M,mean=0,sd=1), n_gen, M))
+  } else if (method == "grouped") {
+    # https://www.sciencedirect.com/science/article/pii/S0167947317300440
+  }
+  cnames <- as.character(glue("x{1:M}"))
+  colnames(X) <- cnames
+  age_start <- runif(n_gen, 20, 80)
+  linpred <- rowSums(sweep(X, 2, betas, "*"))
+  
+  # Get age of death
+  age_death <- vector(length = n_gen)
+  for (i in 1:n_gen){
+    age_death[i] <- rgompertz_aft(1, sigma = sigma, linpred = linpred[i], tau = tau)
+  }
+  
+  # Remove observations that are left-truncated
+  indx_obs <- which(age_start < age_death)[1:n_obs]  # [1:n_obs[k]] to obtain the intended sample size 
+  df_sim <- as.data.frame(cbind(X, age_death, age_start, linpred))[indx_obs,]
+  
+  # Get mean residual life
+  for (i in 1:nrow(df_sim)){
+    mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim$age_start[i] * exp(df_sim$linpred[i])), 
+                           upper=Inf, a = a, b = b)$value
+    s_cond <-  gomp_baseline_surv(df_sim$age_start[i] * exp(df_sim$linpred[i]), a = a, b = b) 
+    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-df_sim$linpred[i])
+  }
+  
+  # Get biological age (via population lifetable)
+  for (i in 1:nrow(df_sim)){
+    df_sim$b_age[i] <- lt$t[ which.min(abs(lt$mrl - df_sim$mrl[i])) ]
+  }
+  
+  # Add censoring 
+  df_sim$yrs_rem <- df_sim$age_death - df_sim$age_start
+  wh <- which(df_sim$yrs_rem > followup) # censored
+  df_sim$status <- 1
+  df_sim$status[wh] <- 0
+  df_sim$follow_up_time <- df_sim$yrs_rem
+  df_sim$follow_up_time[wh] <- followup
+  df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
+  
+  return(df_sim)
+}
+df1 <- gen_data("independent", M = 4, n_obs = 20)
+```
+
+# Fit AFT
+
+```{r}
+fit_aft <- eha::aftreg(formula = Surv(age_start, age_end, status) ~ x1 + x2, 
+                          data = df1, dist = "gompertz") 
+
+# get estimated parameters
+sigma_est <- exp(fit_aft$coefficients["log(scale)"]) # canonical parametrization
+tau_est <- exp(fit_aft$coefficients["log(shape)"]) # canonical parametrization
+a_est <- tau_est / sigma_est
+b_est <- 1 / sigma_est
+estBetaeha[i,]
+```
+
