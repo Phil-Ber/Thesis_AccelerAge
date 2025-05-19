@@ -76,15 +76,25 @@ grid = sample_a_bs() # TODO generate lifetables using parameters, then fit
 
 
 ```{r}
-generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho) {
+generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho, non_zero_betas, X_scale) {
   
-  print("Generating X and βs...")
-  X = generate_X(n = pop_n, p = p, g = g, constant_in_group =F, rho = 0.9, seed = seed, rho_between = 0.2, non_zero_groups = 0.5, beta_scale = 0.5, beta_denom = betafrac, X_plots = X_plots)
+  print("Generating βs...")
+  betas = generate_betas(p = p, g=g, rho = β_rho, rho_between = 0.2,
+                         seed = seed, mu_u = 1, mu_l = -2, beta_scale = 0.5,
+                         beta_denom = 20, plot = T, non_zero_groups = non_zero_betas)
+  
+  # betas$beta = betas$beta + 0.01
+  
+  
+  print("Generating X...")
+  X = generate_X(n = pop_n, p = p, g = g, rho = X_rho, seed = seed,
+                 rho_between = 0.2,
+                 X_plots = X_plots, scale = X_scale)
   print("Done!")
   
   
   print("Generating population lifetable...")
-  lt = generate_population_lifetable(N_pop = pop_n, M = p, betas = -X$betas,
+  lt = generate_population_lifetable(N_pop = pop_n, M = p, betas = betas$beta,
                                    X = X$X, filename = ltname,
                                    seed = seed, force_recalc = force_recalc, a=a, b=b)
   print("Done!")
@@ -100,29 +110,22 @@ generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recal
   print(plot)
   
   print("Generating data from lifetable...")
-  df_sim = create_dataset(method = "grouped", M = p, n_obs = obs_n, G = g,
-                          gsize = (p/g), lt = lt, betas = X$betas,
-                          seednr = seed+1, X_plots = F, a=a, b=b,
-                          betafrac = betafrac)
+  df_sim = create_dataset(M = p, n_obs = obs_n, G = g,
+                          gsize = (p/g), lt = lt, betas = betas$beta,
+                          seednr = seed+1, X_plots = F, a=a, b=b, X_rho = X_rho,
+                          X_scale = X_scale)
   
-  return(list(df = df_sim, true_betas = X$betas))
+  return(list(df = df_sim, true_betas = betas))
 }
 ```
 
 
 ```{r}
-df_sim = generate_data(pop_n = 100 %>% as.integer(),
-                       obs_n = 500,
-                       p = 20,  #  number of βs
-                       g = 4,  #  β number of groups
-                       ltname = "15may",  #  File prefix
-                       betafrac = 20,  # Beta shrinking factor
-                       seed = 124,
-                       force_recalc = T,  #  Override saved lifetable
-                       X_plots = T,
-                       a = exp(-9),  # Default: exp(-9)
-                       b = 0.085)  # Default = 0.085
-lt = read_rds("pop_lifetable_15may.rds")
+df_sim = generate_data(pop_n = 10000, obs_n = 500, p = 200, g = 4,
+                       ltname = "19may", betafrac = 40, seed = 123,
+                       force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
+                       X_rho = 0, β_rho = 0.9, non_zero_betas = 0.75, X_scale = 0.1)
+lt = read_rds("pop_lifetable_19may.rds")
 true_betas = df_sim$true_betas
 df_sim = df_sim$df
 ```

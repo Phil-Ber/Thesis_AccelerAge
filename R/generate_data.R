@@ -83,21 +83,21 @@ create_dataset = function(
     ################################################################
     #### Create data set 
     ################################################################
-    method = c("independent", "grouped"),                                   # Matrix of covariates
     M,                                        # number of predictors
     n_obs,                                    # number of *observed* subjects
-    a = exp(-9),                              # Gompertz baseline param
-    b = 0.085,                                # Gompertz baseline param
-    followup = 20,                            # maximum follow‑up time
-    N_pop = 1e5,                              # pop. size for the lifetable
-    G = 3,                                    # number of groups (for grouped)
-    gsize = 5,                                # group size (for grouped)
-    seednr = 42,                             # seed for reproducibility
-    filename = "",                            # OPTIONAL file name for lifetable
-    betas = c(-1,0,1),                         # Pop param
-    betafrac = 20,
-    lt = NA,
-    X_plots = F
+    a,                              # Gompertz baseline param
+    b,                                # Gompertz baseline param
+    followup,                            # maximum follow‑up time
+    N_pop,                              # pop. size for the lifetable
+    G,                                    # number of groups (for grouped)
+    gsize,                                # group size (for grouped)
+    seednr,                             # seed for reproducibility
+    filename,                            # OPTIONAL file name for lifetable
+    betas,                         # Pop param
+    lt,
+    X_rho,
+    X_plots,
+    X_scale
 ) {
   
   sigma <- 1/b # canonical parametrization
@@ -106,18 +106,15 @@ create_dataset = function(
   
   
   n_gen <- 2 * n_obs # twice as many to ensure I generate enough, because for some T < C => not observed
-  if (method == "independent") {
-    X <- as.data.frame(matrix( rnorm(n_gen*M,mean=0,sd=1), n_gen, M))
-  } else if (method == "grouped") {
-    # Generate it in 
-    result = generate_X(n = n_gen, p = M, g = G, constant_in_group =F, rho = 0.9, seed = seednr, rho_between = 0.2, non_zero_groups = 0.5, beta_scale = 0.5, X_plots = X_plots, beta_denom = betafrac)
-    X = result$X # Extract X from the list
-    # betas = result$betas / 100 # Change accordingly!!!!!!
-  }
+
+  # Generate it in 
+  result = generate_X(n = n_obs, p = M, g = G, rho = X_rho, rho_between = 0.2, seed = seednr, scale = X_scale, X_plots = X_plots)
+  X = result$X # Extract X from the list
+  
   cnames <- as.character(glue("x{1:M}"))
   colnames(X) <- cnames
   age_start <- runif(n_gen, 20, 80)
-  linpred <- rowSums(sweep(X, 2, betas, "*"))
+  linpred <- rowSums(sweep(X, 2, betas, "*"))/
   
   # Get age of death
   age_death <- vector(length = n_gen)
@@ -196,144 +193,23 @@ sim_grouped_betas_pberends = function(p, g) {
 }
 
 
-sim_block_toeplitz_lasso = function(p, g, rho = 0.7, rho_between = 0.2, seed = NULL, 
-                                    scale = 2, beta_mu_u = 5, beta_mu_l = -5, non_zero = 0.8) {
-  # https://projecteuclid.org/journals/annals-of-applied-statistics/volume-7/issue-3/A-method-for-generating-realistic-correlation-matrices/10.1214/13-AOAS638.full
-  # https://en.wikipedia.org/wiki/Block_matrix#Block_Toeplitz_matrices
-  # p: total number of predictors
-  # g: number of groups
-  # rho: correlation parameter
-  # seed: random seed for reproducibility
-  # scale: scaling factor for covariance matrix
-  # beta_mu_u: upper boundary for unif means
-  # beta_mu_l: lower boundary for unif means
-  # non_zero: sparsity, prop of non-zero true betas
-  if (!is.null(seed)) set.seed(seed)
-  library(MASS)
-  stopifnot(p %% g == 0)
-  p_g = p/g
-  
-  # Simple group means
-  mus = runif(g, beta_mu_l, beta_mu_u)
-  
-  # Which groups are active
-  active_groups = sample(1:g, size = round(g * non_zero))
-  
-  # Create a true block Toeplitz matrix
-  sigma_full = matrix(0, p, p)
-  
-  # Fill each block based on its distance from diagonal
-  for (i in 1:g) {
-    for (j in 1:g) {
-      # Indices for the current block
-      i_idx = ((i-1) * p_g + 1):(i * p_g)
-      j_idx = ((j-1) * p_g + 1):(j * p_g)
-      
-      # Fill in with appropriate correlation based on block distance
-      block_distance = abs(i - j)
-      if (block_distance == 0) {
-        # On diagonal - within group correlation
-        sigma_full[i_idx, j_idx] = toeplitz(rho^(0:(p_g-1)))
-      } else {
-        # Correlation decreases with group distance 
-        sigma_full[i_idx, j_idx] = rho_between^block_distance
-        
-      }
-    }
-  }
-  heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none")
-  
-  # Create the mean vector
-  mu_full = numeric(p)
-  for (group in active_groups) {
-    idx = ((group-1) * p_g + 1):(group * p_g)
-    mu_full[idx] = mus[group]
-  }
-  
-  # Generate all betas using block matrix
-  betas = mvrnorm(1, mu = mu_full, Sigma = scale * sigma_full)
-  
-  # Set inactive groups to exactly zero
-  for (group in setdiff(1:g, active_groups)) {
-    idx = ((group-1) * p_g + 1):(group * p_g)
-    betas[idx] = 0
-  }
-  
-  # Create the dataframe to return
-  betaframe = tibble(
-    group = as.factor(rep(1:g, each = p_g)),
-    beta = betas
-  )
-  
-  return(betaframe)
-}
 
-generate_betas = function(p, g, rho, rho_between, seed, scale, mu_u, mu_l, non0, b_scale, b_denom, plot) {
+generate_betas = function(p, g, rho, rho_between, seed,
+                          mu_u, mu_l, beta_scale, beta_denom, plot,
+                          non_zero_groups) {
   
-}
-
-generate_X = function(n, p, g, rho = 0.7, constant_in_group = FALSE, rho_between = 0.2, seed = NULL, 
-                      scale = 2, beta_mu_u = 0, beta_mu_l = 0, non_zero_groups = 0.7, beta_scale = 0.5, beta_denom = 20,
-                      X_plots = T) {
-  # https://projecteuclid.org/journals/annals-of-applied-statistics/volume-7/issue-3/A-method-for-generating-realistic-correlation-matrices/10.1214/13-AOAS638.full
-  # https://en.wikipedia.org/wiki/Block_matrix#Block_Toeplitz_matrices
-  # n: number of individuals
-  # p: total number of predictors
-  # g: number of groups
-  # rho: correlation parameter
-  # constant_in_group: whether correlation is constant within a group
-  # seed: random seed for reproducibility
-  # scale: scaling factor for covariance matrix
-  # beta_mu_u: upper boundary for unif means
-  # beta_mu_l: lower boundary for unif means
-  # non_zero_groups: proportion of groups with non-zero coefficients
-  # beta_scale: scaling factor for beta coefficients
-  # beta_denom: post generation scaling constant.
+  # # debug
+  # p = 200; g = 20; rho = 0.9; rho_between = 0.2; seed = 123; mu_u = 2; mu_l = -2
+  # beta_scale = 0.5; beta_denom = 20; plot = T; non_zero_groups = 0.5
   
   if (!is.null(seed)) set.seed(seed)
   library(MASS)
   stopifnot(p %% g == 0)
+  
   p_g = p/g
-  n_g = n/g
-  
-  # --------------Create a block Toeplitz matrix for X--------------
-  sigma_var = matrix(0, p, p)
-  
-  # Fill each block based on its distance from diagonal
-  for (i in 1:g) {
-    for (j in 1:g) {
-      # Indices for the current block
-      i_idx = ((i-1) * p_g + 1):(i * p_g)
-      j_idx = ((j-1) * p_g + 1):(j * p_g)
-      
-      # Fill in with appropriate correlation based on block distance
-      block_distance = abs(i - j) # GROUP VALUE
-      if (block_distance == 0) { # On diagonal
-        if (constant_in_group) {
-          sigma_var[i_idx, j_idx] = rho
-        } else {
-          # Within group correlation, pmax takes the highest value so within goup can not be lower than between
-          sigma_var[i_idx, j_idx] = toeplitz(pmax(rho^(0:(p_g-1)), rep(rho_between, p_g)))
-          # sigma_var[i_idx, j_idx] = toeplitz(rho^(0:(p_g-1)))
-          
-        }
-      } else {
-        # Correlation decreases with group distance 
-        sigma_var[i_idx, j_idx] = rho_between
-      }
-    }
-  }
-  
-  
-  # Generate all covariates using block matrix
-  X = mvrnorm(n, mu = rep(0,p), Sigma = scale * sigma_var)
-  
-  # Vector indicating group memberships
   group_membership = rep(1:g, each = p_g)
-  
-  # ----------Generate beta coefficients with group structure--------------
   # Sample Beta means from uniform distribution
-  mus = runif(g, beta_mu_l, beta_mu_u)
+  mus = runif(g, mu_l, mu_u)
   betas = numeric(p)
   
   # Randomly select which groups will have non-zero coefficients
@@ -374,41 +250,31 @@ generate_X = function(n, p, g, rho = 0.7, constant_in_group = FALSE, rho_between
   betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full * beta_scale)
   betas = betas/beta_denom
   
+  
+  # Set inactive groups to exactly zero for Betas
+  for (group in setdiff(1:g, active_groups)) {
+    idx = ((group-1) * p_g + 1):(group * p_g)
+    betas[idx] = 0
+  }
+  
+  beta_df = tibble(beta = betas, group = group_membership)
+  
+  # Scale active betas to make E(betas) = 0
+  beta_df = beta_df %>%
+    mutate(beta = if_else(group %in% active_groups,
+                          beta - mean(beta_df$beta[beta_df$group %in% active_groups], 
+                                      na.rm = TRUE),
+                          beta))
+  
+  
   print(glue("{c('Lower', 'Upper')} range of beta values: {range(betas)}"))
   
-  
-  # # For each group, generate coefficients
-  # for (group in 1:g) {
-  #   idx = which(group_membership == group) # Get ids for betas in this group
-  #   
-  #   if (group %in% active_groups) {
-  #     # Non-zero group: generate correlated coefficients
-  #     group_mean = mus[group] * beta_scale  # Scale down the mean
-  #     
-  #     # Create correlation matrix for the coefficients in this group
-  #     group_sigma = matrix(rho, p_g, p_g)
-  #     diag(group_sigma) = 1
-  #     
-  #     # Generate correlated beta coefficients for this group
-  #     betas[idx] = mvrnorm(1, mu = rep(group_mean, p_g), Sigma = group_sigma * beta_scale^2)
-  #   } else {
-  #     # Zero group: all coefficients are zero
-  #     betas[idx] = rep(0, p_g)
-  #   }
-  # }
-  
-  X_df = as.tibble(X)
-  
-  
-  # ----------Plot metrics--------------
-  if (X_plots) {
-    ((betas) %*% t(betas)) %>% heatmap(Rowv = NA, Colv = NA, scale = "none", main = "Beta Gram Matrix")
-    # Visualize correlation structure
-    heatmap(sigma_var, Rowv = NA, Colv = NA, scale = "none", main = "Sigma structure")
+  if (plot) {
     heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none", main = "Betas sigma")
+    ((betas) %*% t(betas)) %>% heatmap(Rowv = NA, Colv = NA, scale = "none", main = "Beta Gram Matrix")
     
     #  boxplot visualization for betas
-    beta_by_group <- split(betas, rep(1:g, each = p_g))
+    beta_by_group <- split(beta_df$beta, rep(1:g, each = p_g))
     boxplot(beta_by_group, 
             main = "Beta Coefficients Distribution by Group",
             xlab = "Group", 
@@ -418,6 +284,59 @@ generate_X = function(n, p, g, rho = 0.7, constant_in_group = FALSE, rho_between
             outline = TRUE)
     # Add a horizontal line at y=0 for reference
     abline(h = 0, lty = 2, col = "gray50")
+  }
+  
+  return(beta_df)
+}
+
+generate_X = function(n, p, g, rho, rho_between, seed = NULL, 
+                      scale = 0.5, X_plots = T) {
+  # https://projecteuclid.org/journals/annals-of-applied-statistics/volume-7/issue-3/A-method-for-generating-realistic-correlation-matrices/10.1214/13-AOAS638.full
+  # https://en.wikipedia.org/wiki/Block_matrix#Block_Toeplitz_matrices
+  if (!is.null(seed)) set.seed(seed)
+  library(MASS)
+  stopifnot(p %% g == 0)
+  p_g = p/g
+  n_g = n/g
+  
+  # --------------Create a block Toeplitz matrix for X--------------
+  sigma_var = matrix(0, p, p)
+  
+  # Fill each block based on its distance from diagonal
+  for (i in 1:g) {
+    for (j in 1:g) {
+      # Indices for the current block
+      i_idx = ((i-1) * p_g + 1):(i * p_g)
+      j_idx = ((j-1) * p_g + 1):(j * p_g)
+      
+      # Fill in with appropriate correlation based on block distance
+      block_distance = abs(i - j) # GROUP VALUE
+      if (block_distance == 0) { # On diagonal
+        # Within group correlation, pmax takes the highest value so within goup can not be lower than between
+        sigma_var[i_idx, j_idx] = toeplitz(pmax(rho^(0:(p_g-1)), rep(rho_between, p_g)))
+        # sigma_var[i_idx, j_idx] = toeplitz(rho^(0:(p_g-1)))
+      } else { # Off Diagonal
+        # Correlation decreases with group distance 
+        sigma_var[i_idx, j_idx] = rho_between
+      }
+    }
+  }
+  
+  
+  # Generate all covariates using block matrix
+  X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
+  
+  # Vector indicating group memberships
+  group_membership = rep(1:g, each = p_g)
+  
+  
+  X_df = as.tibble(X)
+  
+  
+  # ----------Plot metrics--------------
+  if (X_plots) {
+    # Visualize correlation structure
+    heatmap(sigma_var, Rowv = NA, Colv = NA, scale = "none", main = "Sigma structure")
     
     # # Visualize X matrix subsample
     # X_sample = X[1:min(100, n), 1:min(100, p)]
@@ -442,17 +361,9 @@ generate_X = function(n, p, g, rho = 0.7, constant_in_group = FALSE, rho_between
     cor(X_df) %>% heatmap(Rowv = NA, Colv = NA, scale = "none", main = "X Matrix Correlations")
   }
   
-  # Set inactive groups to exactly zero for Betas
-  for (group in setdiff(1:g, active_groups)) {
-    idx = ((group-1) * p_g + 1):(group * p_g)
-    betas[idx] = 0
-  }
-  
   colnames(X_df) = paste0("X", 1:p)
   return(list(
     X = X_df,
-    betas = betas,
-    group_membership = group_membership,
-    active_groups = active_groups
+    group_membership = group_membership
   ))
 }
