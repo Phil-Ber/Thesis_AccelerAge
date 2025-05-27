@@ -22,6 +22,8 @@ source("R/weibull_draw.R")
 ################################################################
 #### Create data set 
 ################################################################
+
+# Set beta to 0, use independent groups as in paper
 gen_data <- function(
   method     = c("independent","grouped"),  # which X‑generation scheme
   M,                                        # number of predictors
@@ -40,28 +42,51 @@ gen_data <- function(
   ################################################################
   
   set.seed(seednr)
+  
   sigma <- 1/b # canonical parametrization
   tau <- a/b # canonical parametrization
-  betas = runif(M,-2,2)
   
-  # beta0 in a group same value, add epsilon distr
+  followup = 20
+  M <- 2 # number of predictors (all standard normally distributed)
+  betas <- c(0.05, 0.05) # vector of beta's (should be of length M)
   
-  # betas <- c(0.05, 0.05) # vector of beta's (should be of length M)
+  N_pop <- 1e5 # population size (from which lifetable is determined)
+  n_obs <- 5e3 # number of observations 
   
-
+  ################################################################
+  #### Create lifetable for population
+  ################################################################
   
+  X <- matrix( rnorm(N_pop*M,mean=0,sd=1), N_pop, M) # matrix of predictors 
+  
+  t <- vector(length = N_pop)                                                     
+  for (i in 1:N_pop){
+    t[i] <- rgompertz_aft(1, sigma = sigma, tau = tau, linpred = sum(betas * X[i,])) # vector of ages-of-death
+  }
+  
+  lifetable_pop <- as.data.frame(cbind(X, t))
+  lifetable_pop <- lifetable_pop[order(lifetable_pop$t),]
+  
+  mrl <- vector(length = N_pop)
+  for (j in 1:N_pop){
+    mrl[j] <- mean(lifetable_pop$t[j:N_pop]) - lifetable_pop$t[j]
+  }
+  
+  lifetable_pop$mrl <- mrl
+  
+  # smoothen 
+  fitsmooth <- scam(mrl ~ s(t, bs = "mpd"), data = lifetable_pop)
+  xx <- seq(0,max(lifetable_pop$t), by = 0.1)
+  lt <- as.data.frame(cbind(t = xx, mrl =  predict(fitsmooth, data.frame(t=xx))))
   
   ################################################################
   #### Create data set 
   ################################################################
+  
   n_gen <- 2 * n_obs # twice as many to ensure I generate enough, because for some T < C => not observed
-  if (method == "independent") {
-    X <- as.data.frame(matrix( rnorm(n_gen*M,mean=0,sd=1), n_gen, M))
-  } else if (method == "grouped") {
-    # https://www.sciencedirect.com/science/article/pii/S0167947317300440
-  }
-  cnames <- as.character(glue("x{1:M}"))
-  colnames(X) <- cnames
+  
+  X <- as.data.frame(matrix( rnorm(n_gen*M,mean=0,sd=1), n_gen, M))
+  colnames(X) <- c("x1", "x2")
   age_start <- runif(n_gen, 20, 80)
   linpred <- rowSums(sweep(X, 2, betas, "*"))
   
@@ -96,10 +121,11 @@ gen_data <- function(
   df_sim$follow_up_time <- df_sim$yrs_rem
   df_sim$follow_up_time[wh] <- followup
   df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
-  
   return(df_sim)
 }
 df1 <- gen_data("independent", M = 4, n_obs = 20)
+df1 %>% ggplot(aes(x = t, y = mrl)) + 
+  geom_line()
 ```
 
 # Fit AFT

@@ -18,79 +18,27 @@ library(psbcGroup)
 ```
 
 
-```{r}
-df_sim = generate_data(pop_n = 4000 %>% as.integer(),
-                       obs_n = 500,
-                       p = 20,  #  number of βs
-                       g = 4,  #  β number of groups
-                       ltname = "15may",  #  File prefix
-                       betafrac = 40,  # Beta shrinking factor VERY SMALL
-                       seed = 123,
-                       force_recalc = T,  #  Override saved lifetable
-                       X_plots = F,
-                       a = exp(-9),  # Default: exp(-9)
-                       b = 0.085)  # Default = 0.085
-# Example of optimal LT
-#       t               mrl         
-# Min.   :  0.00   Min.   :-0.6544  
-# 1st Qu.: 29.34   1st Qu.: 6.8019  
-# Median : 58.69   Median :24.6824  
-# Mean   : 58.69   Mean   :30.6838  
-# 3rd Qu.: 88.03   3rd Qu.:52.1135  
-# Max.   :117.37   Max.   :80.9731  
-sample_a_bs = function(p_u = 2000, p_l = 2, g_u= 200, g_l = 2, a_u =-50, a_l = -2, b_u = 20, b_l = 0.01, lt_n = 500, n_samples = 10000) {
-  as = seq(a_l, a_u, by = -0.2) %>% exp
-  bs = seq(b_l, b_u, by = 0.05)
-  gs = seq(g_l, g_u, by = 2)
-  ps = seq(p_l, p_u, by = 4)
-  
-  # create grid with only p %% g = 0 combos
-  valid_pg_pairs = expand.grid(p = ps, g = gs) %>%
-    filter(p %% g == 0)
-  
-  # Sample from grid
-  n_samples = min(n_samples, length(as) * length(bs) * nrow(valid_pg_pairs))
+# Contents "generate_data.R" file
 
-  
-  a_indices = sample(length(as), n_samples, replace = TRUE)
-  b_indices = sample(length(bs), n_samples, replace = TRUE)
-  pg_indices = sample(nrw(valid_pg_pairs), n_samples, replace = TRUE)
-  
-  # Create result dataframe
-  result = data.frame(
-    a = as[a_indices],
-    b = bs[b_indices],
-    p = valid_pg_pairs$p[pg_indices],
-    g = valid_pg_pairs$g[pg_indices],
-    log_a = log(as[a_indices])
-  )
-  
-  return(result)
-
-}
-
-grid = sample_a_bs() # TODO generate lifetables using parameters, then fit
-# model to score derived from parameters to estimate optimal a, b for p, g
-# For now, I will just focus on 
-```
-
+# Wrapper
 
 ```{r}
-generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho, non_zero_betas, X_scale) {
+generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho, non_zero_betas, X_scale, active_hazard, betasep, bscale) {
   
   print("Generating βs...")
-  betas = generate_betas(p = p, g=g, rho = β_rho, rho_between = 0.2,
-                         seed = seed, mu_u = 1, mu_l = -2, beta_scale = 0.5,
-                         beta_denom = 20, plot = T, non_zero_groups = non_zero_betas)
+  betas = generate_betas(p = p, g=g, rho = β_rho, rho_between = 0,
+                         seed = seed, mu_u = betasep, mu_l = -betasep, beta_scale = bscale,
+                         beta_denom = betafrac, plot = T, non_zero_groups = non_zero_betas, active_hazard = active_hazard)
   
   # betas$beta = betas$beta + 0.01
   
   
   print("Generating X...")
   X = generate_X(n = pop_n, p = p, g = g, rho = X_rho, seed = seed,
-                 rho_between = 0.2,
+                 rho_between = 0,
                  X_plots = X_plots, scale = X_scale)
   print("Done!")
+
   
   
   print("Generating population lifetable...")
@@ -113,33 +61,96 @@ generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recal
   df_sim = create_dataset(M = p, n_obs = obs_n, G = g,
                           gsize = (p/g), lt = lt, betas = betas$beta,
                           seednr = seed+1, X_plots = F, a=a, b=b, X_rho = X_rho,
-                          X_scale = X_scale)
+                          X_scale = X_scale, followup = 20)
   
   return(list(df = df_sim, true_betas = betas))
 }
 ```
 
+# Distributions of Linpred
 
 ```{r}
-df_sim = generate_data(pop_n = 10000, obs_n = 500, p = 200, g = 4,
-                       ltname = "19may", betafrac = 40, seed = 123,
+source("R/generate_data.R")
+p = 20
+g = 4
+betas = generate_betas(p = p, g=g, rho = 0.9, rho_between = 0,
+                         seed = 123, mu_u = 2, mu_l = -2, beta_scale = 0.2,
+                         beta_denom = 1, plot = T, non_zero_groups = 0.5, active_hazard = 0.05)
+
+X = generate_X(n = 1000, p = p, g = g, rho = 0.9, seed = 123,
+                 rho_between = 0,
+                 X_plots = F, scale = 0.1)
+
+linpreds = scale(as.matrix(X$X) %*% as.matrix(betas$beta))
+linpreds %>% hist(breaks = 20)
+```
+
+# Test
+
+```{r}
+source("R/generate_data.R")
+
+nzb = 0.5
+bfrac = 40
+p = 20
+g = 4
+bsep = 4
+df_sim = generate_data(pop_n = 10000, obs_n = 500, p = p, g = g,
+                       ltname = "19may", betafrac = bfrac, seed = 123,
                        force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
-                       X_rho = 0, β_rho = 0.9, non_zero_betas = 0.75, X_scale = 0.1)
+                       X_rho = 0, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
+                       #active_hazard = 0.025, betasep = 2)
+                       active_hazard = 0,
+                       #active_hazard = (0*sqrt(p))/nzb/bfrac/bsep,
+                       betasep = bsep, bscale = 0.25)
 lt = read_rds("pop_lifetable_19may.rds")
 true_betas = df_sim$true_betas
 df_sim = df_sim$df
 ```
 
+# Function performance
+
 ```{r}
-aft_reg = function(df_sim) {
+source("R/generate_data.R")
+
+aft_reg = function(df_sim, p) {
+  true_betas = df_sim$true_betas
+  df_sim = df_sim$df
+  
+  
+  # Train/test split 50/50
+  train_indices = sample(1:nrow(df_sim), nrow(df_sim)/2)
+  
+  df_sim_train = df_sim[train_indices,]
+  df_sim_test = df_sim[-train_indices,]
+  
   # Create the formula for AFT regression
   predictor_vars = paste(c(glue("x{1:p}")), collapse = " + ")
   aft_formula = as.formula(paste("Surv(age_start, age_end, status) ~", predictor_vars))
   
   # Fit the AFT model
-  fit_aft <- eha::aftreg(formula = aft_formula, 
-                          data = df_sim, 
-                          dist = "gompertz")
+  fit_aft = tryCatch({
+      fit_aft = eha::aftreg(
+        formula = aft_formula, 
+        data = df_sim_train, 
+        dist = "gompertz",
+        control = list(
+          maxit = 100,
+          trace = FALSE
+        )
+      )
+      fit_aft
+    }, 
+    error = function(e) {
+      message("AFT model error: ", e$message)
+      NA
+  })
+  
+  # If model fitting failed, return NA
+  if (is.na(fit_aft)[1]) {
+    return(NA)
+  }
+
   
   # get estimated parameters
   sigma_est <- exp(fit_aft$coefficients["log(scale)"]) # canonical parametrization
@@ -148,47 +159,63 @@ aft_reg = function(df_sim) {
   b_est <- 1 / sigma_est
   
   betas_est_aft <- fit_aft$coefficients[1:p]
-  linpred_aft <- rowSums(sweep(df_sim[,1:p], 2, betas_est_aft, "*"))
+  linpred_aft <- rowSums(sweep(df_sim_test[,1:p], 2, betas_est_aft, "*")) # SCALE
   
-  for (i in 1:nrow(df_sim)){
-    mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim$age_start[i] * exp(linpred_aft[i])), 
+  for (i in 1:nrow(df_sim_test)){
+    mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim_test$age_start[i] * exp(linpred_aft[i])), 
                            upper=Inf, a = a_est, b = b_est)$value
-    s_cond <-  gomp_baseline_surv(df_sim$age_start[i] * exp(linpred_aft[i]), a = a_est, b = b_est) 
-    df_sim$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
+    s_cond <-  gomp_baseline_surv(df_sim_test$age_start[i] * exp(linpred_aft[i]), a = a_est, b = b_est) 
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
   }
   
-  df_sim %>% ggplot(aes(x = mrl, y = pred_mrl)) +
+  p = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
     geom_point() +
     geom_abline(color = 'red') +
     theme_minimal()
   
+  print(p)
+  
+  # Get the bias
+  aftreg_coef_rmse = sqrt(mean((betas_est_aft - true_betas$betas)^2))
+  
   # Get the RMSE
-  aftreg_rmse = sqrt(mean((df_sim$mrl - df_sim$pred_mrl)^2))
-  return(aftreg_rmse)
+  aftreg_rmse = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
+  return(list(prediction = aftreg_rmse, coefficients = aftreg_coef_rmse))
 }
 
-psbc_reg = fuction(df_sim, p, g) {
-  Y = cbind(df_sim$age_start, df_sim$age_end, df_sim$status)
+psbc_reg = function(df_sim, p, g) {
+  true_betas = df_sim$true_betas
+  df_sim = df_sim$df
+  
+  # Train/test split 50/50
+  train_indices = sample(1:nrow(df_sim), nrow(df_sim)/2)
+  
+  df_sim_train = df_sim[train_indices,]
+  df_sim_test = df_sim[-train_indices,]
+  
+  Y_train = cbind(df_sim_train$age_start, df_sim_train$age_end, df_sim_train$status)
+  Y_test = cbind(df_sim_test$age_start, df_sim_test$age_end, df_sim_test$status)
   
   # Create covariate matrix X
-  X = as.matrix(df_sim[, paste0("x", 1:p)])
+  X_train = as.matrix(df_sim_train[, paste0("x", 1:p)])
+  X_test = as.matrix(df_sim_test[, paste0("x", 1:p)])
   
   XC = NULL # CONFOUNDERS
   
   # Create group indicator for each variable
-  grpInx = rep(1:g, each = p/g)  # assuming all variables are in one group (CHANGE?)
+  grpInx = rep(1:g, each = p/g)
   
-  # Set hyperparameters
+  # Set hyperparameters (PRIOR)?
   hyperParams = list(
-    a.sigSq = 0.1, b.sigSq = 0.1,
-    mu0 = 0, h0 = 0.1,
+    a.sigSq = 0.01, b.sigSq = 0.01,
+    mu0 = 0, h0 = 0.01,
     v = 0.1
   )
   
   # Set starting values https://cran.r-project.org/web/packages/psbcGroup/psbcGroup.pdf
-  w = log(Y[,1])
+  w = log(Y_train[,1])
   mu = 0.1
-  beta = rep(2, p)
+  beta = rep(0.1, p)
   sigSq = 0.5
   tauSq = rep(0.4, p)
   lambdaSq = 100
@@ -199,13 +226,13 @@ psbc_reg = fuction(df_sim, p, g) {
   # MCMC parameters format __ CHANGE __ 
   mcmcParams = list(
     run = list(
-      numReps = 5000,
-      thin = 5,
-      burninPerc = 0.2
+      numReps = 100,
+      thin = 5, # Update params every n steps
+      burninPerc = 0.2 # Discard the first ... steps
     ),
     tuning = list(
-      mu.prop.var = 0.5,
-      sigSq.prop.var = 0.01,
+      mu.prop.var = 0.1,
+      sigSq.prop.var = 0.005,
       L.beC = 50,
       M.beC = 1,
       eps.beC = 0.001,
@@ -215,7 +242,7 @@ psbc_reg = fuction(df_sim, p, g) {
     )
   )
   
-  fit_bayes_aft = aftGL_LT(Y, X, XC, grpInx, hyperParams, startValues, mcmcParams)
+  fit_bayes_aft = aftGL_LT(Y_train, X_train, XC, grpInx, hyperParams, startValues, mcmcParams)
   
   # Extract betas using the maximum likelihood via density
   get_mode = function(x){
@@ -225,271 +252,99 @@ psbc_reg = fuction(df_sim, p, g) {
   }
   betas = fit_bayes_aft$beta.p %>% apply(MARGIN = 2, FUN = get_mode)
   # Make linear predictor for MRL
-  X = df_sim[,1:20] %>% as.matrix
-  est_MRL = X %*% betas
+  X_test = X_test %>% as.matrix
+  linpred = X_test %*% betas
   
-  # Get RMSE between estimate and actual MRL
-  RMSE = sqrt(mean((df_sim$mrl - est_MRL)^2))
-  return(RMSE)
+  # Change to lognormal
+  # Create baseline lognormal survival
+  # Implemented in R -> check log scales
+  # dlnorm, use any of them 1 - F(x)
+  # instead of gomp_baseline_surv no false, 1-
+  
+  
+  # a = exp(-9)
+  # b = 0.085
+  
+  # 1-plnorm(1:100, meanlog = fit_bayes_aft$mu.p[120], sdlog = fit_bayes_aft$sigSq.p[120])
+  
+  # Estimate mean from MCMC draws
+  mu_est = mean(fit_bayes_aft$mu.p)
+  sigSq_est = mean(fit_bayes_aft$sigSq.p)
+
+  for (i in 1:nrow(df_sim_test)){
+    mrl_uncon = integrate(function(x) 1 - plnorm(x, meanlog = mu_est, sdlog = sqrt(sigSq_est)), # Var to Sd via sqrt
+                       lower = (df_sim_test$age_start[i] * exp(linpred[i])), 
+                       upper = Inf)$value
+    s_cond = 1 - plnorm(df_sim_test$age_start[i] * exp(linpred[i]), meanlog = mu_est, sdlog = sqrt(sigSq_est))
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
+  }
+  
+  p = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
+    geom_point() +
+    geom_abline(color = 'red') +
+    theme_minimal()
+  
+  print(p)
+  
+  # Get the RMSE
+  pred_RMSE = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
+  
+  beta_RMSE = NA #sqrt(mean((betas$beta - true_betas$beta)^2))
+  return(list(prediction = pred_RMSE, coefficients = beta_RMSE))
 
 }
 
-```
-
-
-# Generate Covariates and Betas
-
-```{r}
-source("R/generate_data.R")
-n = 100000
-p = 20
-g = 4
-
-X = generate_X(n = n, p = p, g = g, constant_in_group =F, rho = 0.9, seed = 123, rho_between = 0.2, non_zero_groups = 0.5, beta_scale = 0.5, beta_denom = 20)
-```
-
-# Generate lifetable
-
-$\vec{\beta}$
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/40,
-                                   X = X$X, filename = "small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-$\frac{\vec{\beta}}{20}$
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/20,
-                                   X = X$X, filename = "div20_small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-$\frac{\vec{\beta}}{40}$
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/40,
-                                   X = X$X, filename = "div40_small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-$\frac{\vec{\beta}}{60}$
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/60,
-                                   X = X$X, filename = "div60_small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-
-$\frac{\vec{\beta}}{80}$
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/80,
-                                   X = X$X, filename = "div80_small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-$\frac{\vec{\beta}}{100}$ (Best?)
-
-```{r}
-lt = generate_population_lifetable(N_pop = n, M = p, betas = X$betas/100,
-                                   X = X$X, filename = "div100_small", seed = 123, force_recalc = F)
-
-ggplot(lt, aes(x = t, y = mrl)) +
-    geom_line() +
-    labs(
-      title = "Mean Residual Life Function",
-      x = "Chronological age (years)",
-      y = "Mean Residual Life"
-    ) +
-    theme_minimal()
-
-ggplot(lt, aes(x = mrl)) +
-  geom_histogram(fill = "skyblue") +
-  labs(
-    title = "Distribution of Mean Residul Life (MRL)",
-    x = "Mean Residual Life (MRL)"
-  ) +
-  theme_minimal()
-```
-
-
-# Generate data from lifetable
-
-```{r}
-source("R/generate_data.R")
-
-df_sim = create_dataset(method = "grouped", M = p, n_obs = 500, G = g, gsize = (p/g), lt = lt, betas = X$betas) # Ignore the beta boxplot, old betas are carried over!
-```
-
-# Fit AFT AccelerAge
-
-```{r}
-# Create the formula for AFT regression
-predictor_vars = paste(c(glue("x{1:p}")), collapse = " + ")
-aft_formula = as.formula(paste("Surv(age_start, age_end, status) ~", predictor_vars))
-
-# Fit the AFT model
-fit_aft <- eha::aftreg(formula = aft_formula, 
-                        data = df_sim, 
-                        dist = "gompertz")
-
-# get estimated parameters
-sigma_est <- exp(fit_aft$coefficients["log(scale)"]) # canonical parametrization
-tau_est <- exp(fit_aft$coefficients["log(shape)"]) # canonical parametrization
-a_est <- tau_est / sigma_est
-b_est <- 1 / sigma_est
-
-betas_est_aft <- fit_aft$coefficients[1:p]
-linpred_aft <- rowSums(sweep(df_sim[,1:p], 2, betas_est_aft, "*"))
-
-for (i in 1:nrow(df_sim)){
-  mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim$age_start[i] * exp(linpred_aft[i])), 
-                         upper=Inf, a = a_est, b = b_est)$value
-  s_cond <-  gomp_baseline_surv(df_sim$age_start[i] * exp(linpred_aft[i]), a = a_est, b = b_est) 
-  df_sim$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
+run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, bfrac, seed, nzb, bsep, X_rho) {
+  
+  print("<<<<GENERATING SIMULATED DATA>>>>")
+  df_sim = generate_data(pop_n = pop_n, obs_n = obs_n, p = p, g = g,
+                       ltname = ltname, betafrac = bfrac, seed = 123,
+                       force_recalc = F, X_plots = T, a = exp(-9), b = 0.085,
+                       X_rho = X_rho, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
+                       #active_hazard = 0.025, betasep = 2)
+                       active_hazard = (0.05*sqrt(p))/nzb/bfrac/bsep,
+                       betasep = bsep, bscale = 0.25)
+  
+  set.seed(seed+1)
+  print("<<<<RUNNING AFT>>>>")
+  rmse_aft = aft_reg(df_sim = df_sim, p = p)
+  
+  set.seed(seed+1)
+  print("<<<<RUNNING PSBC BAYESIAN>>>>")
+  rmse_psbc = psbc_reg(df_sim = df_sim, p = p, g = g)
+  
+  return(list(aft = rmse_aft, psbc = rmse_psbc))
 }
 ```
 
 
-```{r}
-df_sim %>% ggplot(aes(x = pred_mrl, y = mrl)) +
-  geom_point() +
-  geom_abline()
-```
+# Experiments
 
 ```{r}
-Y = cbind(df_sim$age_start, df_sim$age_end, df_sim$status)
+# p = 20
+rmses = run_experiment(p = 20, g = 4, ltname = "p20_may20", bfrac = 40, seed = 42, nzb = 0.5, bsep = 2, X_rho = 0)
+print(rmses)
 
-# Create covariate matrix X
-X = as.matrix(df_sim[, paste0("x", 1:p)])
+rmses = run_experiment(p = 60, g = 4, ltname = "p60_may20", bfrac = 40, seed = 43, nzb = 0.5, bsep = 2, X_rho = 0)
+print(rmses)
 
-XC = NULL # CONFOUNDERS
+rmses = run_experiment(p = 100, g = 4, ltname = "p100_may20", bfrac = 40, seed = 44, nzb = 0.5, bsep = 2, X_rho = 0)
+print(rmses)
 
-# Create group indicator for each variable
-grpInx = rep(1, p)  # assuming all variables are in one group (CHANGE?)
-
-# Set hyperparameters
-hyperParams = list(
-  a.sigSq = 0.1, b.sigSq = 0.1,
-  mu0 = 0, h0 = 0.1,
-  v = 0.1
-)
-
-# Set starting values https://cran.r-project.org/web/packages/psbcGroup/psbcGroup.pdf
-w = log(Y[,1])
-mu = 0.1
-beta = rep(2, p)
-sigSq = 0.5
-tauSq = rep(0.4, p)
-lambdaSq = 100
-betaC = rep(0.11, 0)
-startValues = list(w=w, beta=beta, tauSq=tauSq, mu=mu, sigSq=sigSq,
-lambdaSq=lambdaSq, betaC=betaC)
-
-# MCMC parameters format
-mcmcParams = list(
-  run = list(
-    numReps = 5000,
-    thin = 5,
-    burninPerc = 0.2
-  ),
-  tuning = list(
-    mu.prop.var = 0.5,
-    sigSq.prop.var = 0.01,
-    L.beC = 50,
-    M.beC = 1,
-    eps.beC = 0.001,
-    L.be = 100,
-    M.be = 1,
-    eps.be = 0.001
-  )
-)
-
-fit_bayes_aft = aftGL_LT(Y, X, XC, grpInx, hyperParams, startValues, mcmcParams)
-
-
+rmses = run_experiment(p = 200, g = 4, ltname = "p200_may20", bfrac = 40, seed = 45, nzb = 0.5, bsep = 2, X_rho = 0)
+print(rmses)
 ```
+
+# Monte carlo
+
+```{r}
+# Parameters grid:
+# p
+# g
+# 
+MC = replicate(10000, {
+  
+})
+```
+
 

@@ -30,13 +30,22 @@ generate_population_lifetable = function(
   if (!file.exists(path) || force_recalc) {
     # Ages
     set.seed(seed)
-    X = matrix( rnorm(N_pop*M,mean=0,sd=1), N_pop, M) # matrix of predictors 
+    # X = matrix( rnorm(N_pop*M,mean=0,sd=1), N_pop, M) # matrix of predictors
     # Generate X -> Beta
     
+    linpred = (as.matrix(X) %*% as.matrix(betas))
     t = vector(length = N_pop)                                                     
     for (i in 1:N_pop){
-      t[i] = rgompertz_aft(1, sigma = sigma, tau = tau, linpred = sum(betas * X[i,])) # vector of ages-of-death
+      t_i = rgompertz_aft(1, sigma = sigma, tau = tau, linpred = linpred[i]) # vector of ages-of-death
+      if (t_i > 150) { # If the age-of-death > 150, we assume 150
+        t_i = 150
+      }
+      t[i] = t_i
     }
+    
+    print(glue("Range of death: {range(t)}"))
+    
+    plot(ecdf(t), xlim = c(0,100), main = "Cumulative ")
     
     lifetable_pop = as.data.frame(cbind(X, t))
     lifetable_pop = lifetable_pop[order(lifetable_pop$t),]
@@ -88,11 +97,9 @@ create_dataset = function(
     a,                              # Gompertz baseline param
     b,                                # Gompertz baseline param
     followup,                            # maximum follow‑up time
-    N_pop,                              # pop. size for the lifetable
     G,                                    # number of groups (for grouped)
     gsize,                                # group size (for grouped)
     seednr,                             # seed for reproducibility
-    filename,                            # OPTIONAL file name for lifetable
     betas,                         # Pop param
     lt,
     X_rho,
@@ -105,16 +112,16 @@ create_dataset = function(
   # Check if betas are of length M, and is a numeric/float vector
   
   
-  n_gen <- 2 * n_obs # twice as many to ensure I generate enough, because for some T < C => not observed
+  n_gen <- 10 * n_obs # 5 TIMES as many to ensure I generate enough, because for some T < C => not observed
 
   # Generate it in 
-  result = generate_X(n = n_obs, p = M, g = G, rho = X_rho, rho_between = 0.2, seed = seednr, scale = X_scale, X_plots = X_plots)
+  result = generate_X(n = n_obs, p = M, g = G, rho = X_rho, rho_between = 0, seed = seednr, scale = X_scale, X_plots = X_plots)
   X = result$X # Extract X from the list
   
   cnames <- as.character(glue("x{1:M}"))
   colnames(X) <- cnames
   age_start <- runif(n_gen, 20, 80)
-  linpred <- rowSums(sweep(X, 2, betas, "*"))/
+  linpred <- rowSums(sweep(X, 2, betas, "*"))
   
   # Get age of death
   age_death <- vector(length = n_gen)
@@ -123,14 +130,28 @@ create_dataset = function(
   }
   
   # Remove observations that are left-truncated
-  indx_obs <- which(age_start < age_death)[1:n_obs]  # [1:n_obs[k]] to obtain the intended sample size 
+  valid_indices <- which(age_start < age_death)
+  
+  # Check if we have enough valid cases
+  if (length(valid_indices) < n_obs) {
+    warning(paste("Only", length(valid_indices), "valid cases where age_start < age_death, but", n_obs, "requested."))
+    # Use all available valid indices
+    indx_obs <- valid_indices
+  } else {
+    # Use the first n_obs valid indices
+    indx_obs <- valid_indices[1:n_obs]
+  }
+  
+  print(glue("Nr of valid indices: {length(valid_indices)}"))
+  
+  # Create the data frame with valid observations only
   df_sim <- as.data.frame(cbind(X, age_death, age_start, linpred))[indx_obs,]
+  
   
   cat("Range of linpred values:", range(linpred), "\n")
   if(any(is.infinite(exp(linpred)))) {
     warning("Some exp(linpred) values are Inf - consider scaling betas down further")
   }
-  
   
   # Get mean residual life
   for (i in 1:nrow(df_sim)){
@@ -196,7 +217,7 @@ sim_grouped_betas_pberends = function(p, g) {
 
 generate_betas = function(p, g, rho, rho_between, seed,
                           mu_u, mu_l, beta_scale, beta_denom, plot,
-                          non_zero_groups) {
+                          non_zero_groups, active_hazard) {
   
   # # debug
   # p = 200; g = 20; rho = 0.9; rho_between = 0.2; seed = 123; mu_u = 2; mu_l = -2
@@ -248,7 +269,6 @@ generate_betas = function(p, g, rho, rho_between, seed,
   
   # Generate all betas using block matrix
   betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full * beta_scale)
-  betas = betas/beta_denom
   
   
   # Set inactive groups to exactly zero for Betas
@@ -258,16 +278,23 @@ generate_betas = function(p, g, rho, rho_between, seed,
   }
   
   beta_df = tibble(beta = betas, group = group_membership)
-  
-  # Scale active betas to make E(betas) = 0
+  print(glue("Mean of betas pre-scaling: {mean(beta_df$beta)}"))
+  print(glue("{c('Lower', 'Upper')} range of beta values pre-scaling: {range(beta_df$beta)}"))
+  # Scale active betas to make E(betas) = 0.05
   beta_df = beta_df %>%
     mutate(beta = if_else(group %in% active_groups,
-                          beta - mean(beta_df$beta[beta_df$group %in% active_groups], 
-                                      na.rm = TRUE),
+                          (beta - mean(beta_df$beta[beta_df$group %in% active_groups], 
+                                      na.rm = TRUE)) /beta_denom + active_hazard,
                           beta))
   
-  
-  print(glue("{c('Lower', 'Upper')} range of beta values: {range(betas)}"))
+  # Adjust beta magnitude to have a linear predictor of E[pred] = 0, var = 1
+  # current_var = sum(beta_df$beta^2)
+  # current_sd = sqrt(current_var)
+  # 
+  # print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
+  # 
+  # 
+  # print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
   
   if (plot) {
     heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none", main = "Betas sigma")
@@ -277,7 +304,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
     beta_by_group <- split(beta_df$beta, rep(1:g, each = p_g))
     boxplot(beta_by_group, 
             main = "Beta Coefficients Distribution by Group",
-            xlab = "Group", 
+            xlab = "Group",
             ylab = "Coefficient Value",
             col = rainbow(g),
             border = "black",
@@ -285,7 +312,6 @@ generate_betas = function(p, g, rho, rho_between, seed,
     # Add a horizontal line at y=0 for reference
     abline(h = 0, lty = 2, col = "gray50")
   }
-  
   return(beta_df)
 }
 
@@ -324,8 +350,8 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   
   
   # Generate all covariates using block matrix
-  X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
-  
+  # X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
+  X = mvrnorm(n, mu = rep(0, p), Sigma =  sigma_var * scale)
   # Vector indicating group memberships
   group_membership = rep(1:g, each = p_g)
   
