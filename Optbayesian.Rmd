@@ -1,0 +1,111 @@
+---
+title: "Optimize Bayesian Performance"
+author: "Philippe Berends, 3972003"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r}
+library(psbcGroup)
+```
+
+
+# Generate Lognormal Data
+
+
+
+
+```{r}
+psbc_reg = function(df_sim, p, g) {
+  true_betas = df_sim$true_betas
+  df_sim = df_sim$df
+  
+  # Train/test split 50/50
+  train_indices = sample(1:nrow(df_sim), nrow(df_sim)/2)
+  
+  df_sim_train = df_sim[train_indices,]
+  df_sim_test = df_sim[-train_indices,]
+  
+  Y_train = cbind(df_sim_train$age_start, df_sim_train$age_end, df_sim_train$status)
+  Y_test = cbind(df_sim_test$age_start, df_sim_test$age_end, df_sim_test$status)
+  
+  # Create covariate matrix X
+  X_train = as.matrix(df_sim_train[, paste0("x", 1:p)])
+  X_test = as.matrix(df_sim_test[, paste0("x", 1:p)])
+  
+  XC = NULL # CONFOUNDERS
+  
+  # Create group indicator for each variable
+  grpInx = rep(1:g, each = p/g)
+  
+  # Set hyperparameters (PRIOR)?
+  hyperParams = list(
+    a.sigSq = 0.01, b.sigSq = 0.01,
+    mu0 = 0, h0 = 0.01,
+    v = 0.1
+  )
+  
+  # Set starting values https://cran.r-project.org/web/packages/psbcGroup/psbcGroup.pdf
+  w = log(Y_train[,1])
+  mu = 0.1
+  beta = rep(0.1, p)
+  sigSq = 0.5
+  tauSq = rep(0.4, p)
+  lambdaSq = 100
+  betaC = rep(0.11, 0)
+  startValues = list(w=w, beta=beta, tauSq=tauSq, mu=mu, sigSq=sigSq,
+  lambdaSq=lambdaSq, betaC=betaC)
+  
+  # MCMC parameters format __ CHANGE __ 
+  mcmcParams = list(
+    run = list(
+      numReps = 100,
+      thin = 5, # Update params every n steps
+      burninPerc = 0.2 # Discard the first ... steps
+    ),
+    tuning = list(
+      mu.prop.var = 0.1,
+      sigSq.prop.var = 0.005,
+      L.beC = 50,
+      M.beC = 1,
+      eps.beC = 0.001,
+      L.be = 100,
+      M.be = 1,
+      eps.be = 0.001
+    )
+  )
+  
+  fit_bayes_aft = aftGL_LT(Y_train, X_train, XC, grpInx, hyperParams, startValues, mcmcParams)
+  
+  # Extract betas using the maximum likelihood via density
+  get_mode = function(x){
+    xdist = density(x)
+    mode = xdist$x[which.max(xdist$y)]
+    return(mode)
+  }
+  betas = fit_bayes_aft$beta.p %>% apply(MARGIN = 2, FUN = get_mode)
+  # Make linear predictor for MRL
+  X_test = X_test %>% as.matrix
+  linpred = X_test %*% betas
+  
+  # Change to lognormal
+  # Create baseline lognormal survival
+  # Implemented in R -> check log scales
+  # dlnorm, use any of them 1 - F(x)
+  # instead of gomp_baseline_surv no false, 1-
+  
+  
+  # a = exp(-9)
+  # b = 0.085
+  
+  # 1-plnorm(1:100, meanlog = fit_bayes_aft$mu.p[120], sdlog = fit_bayes_aft$sigSq.p[120])
+  
+  # Get the RMSE
+  pred_RMSE = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
+  
+  beta_RMSE = NA #sqrt(mean((betas$beta - true_betas$beta)^2))
+  return(list(prediction = pred_RMSE, coefficients = beta_RMSE))
+
+}
+```
+

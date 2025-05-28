@@ -67,46 +67,6 @@ generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recal
 }
 ```
 
-# Distributions of Linpred
-
-```{r}
-source("R/generate_data.R")
-p = 20
-g = 4
-betas = generate_betas(p = p, g=g, rho = 0.9, rho_between = 0,
-                         seed = 123, mu_u = 2, mu_l = -2, beta_scale = 0.2,
-                         beta_denom = 1, plot = T, non_zero_groups = 0.5, active_hazard = 0.05)
-
-X = generate_X(n = 1000, p = p, g = g, rho = 0.9, seed = 123,
-                 rho_between = 0,
-                 X_plots = F, scale = 0.1)
-
-linpreds = scale(as.matrix(X$X) %*% as.matrix(betas$beta))
-linpreds %>% hist(breaks = 20)
-```
-
-# Test
-
-```{r}
-source("R/generate_data.R")
-
-nzb = 0.5
-bfrac = 40
-p = 20
-g = 4
-bsep = 4
-df_sim = generate_data(pop_n = 10000, obs_n = 500, p = p, g = g,
-                       ltname = "19may", betafrac = bfrac, seed = 123,
-                       force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
-                       X_rho = 0, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
-                       #active_hazard = 0.025, betasep = 2)
-                       active_hazard = 0,
-                       #active_hazard = (0*sqrt(p))/nzb/bfrac/bsep,
-                       betasep = bsep, bscale = 0.25)
-lt = read_rds("pop_lifetable_19may.rds")
-true_betas = df_sim$true_betas
-df_sim = df_sim$df
-```
 
 # Function performance
 
@@ -168,18 +128,38 @@ aft_reg = function(df_sim, p) {
     df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
   }
   
-  p = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
+  plt = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
     geom_point() +
     geom_abline(color = 'red') +
     theme_minimal()
   
-  print(p)
+  print(plt)
   
   # Get the bias
-  aftreg_coef_rmse = sqrt(mean((betas_est_aft - true_betas$betas)^2))
+  aftreg_coef_rmse = sqrt(mean((betas_est_aft - true_betas$beta)^2))
   
+    
   # Get the RMSE
   aftreg_rmse = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
+  
+  # Plot difference between true and estimates betas
+  true_betas$betahat = betas_est_aft
+  
+  plt = true_betas %>%
+    mutate(index = 1:p) %>%
+    ggplot(aes(x = index)) +
+    # Vertical lines between pred and actual
+    geom_segment(aes(xend = index, y = beta, yend = betahat), color = "gray") +
+    geom_point(aes(y = beta, color = "True")) +
+    geom_point(aes(y = betahat, color = "Predicted")) +
+    scale_color_manual(values = c("True" = "black", "Predicted" = "skyblue"),
+                       name = "Type") +
+    ylab("β") +
+    xlab("Index") +
+    labs(title = "True vs Predicted β-coefficients for AFT", subtitle = glue("RMSE = {aftreg_coef_rmse %>% round(4)}")) +
+    theme_minimal()
+  print(plt)
+  
   return(list(prediction = aftreg_rmse, coefficients = aftreg_coef_rmse))
 }
 
@@ -207,33 +187,34 @@ psbc_reg = function(df_sim, p, g) {
   
   # Set hyperparameters (PRIOR)?
   hyperParams = list(
-    a.sigSq = 0.01, b.sigSq = 0.01,
-    mu0 = 0, h0 = 0.01,
-    v = 0.1
+    a.sigSq = 0.7, b.sigSq = 0.7,
+    mu0 = 0, h0 = 0.001,
+    v = 10
   )
   
   # Set starting values https://cran.r-project.org/web/packages/psbcGroup/psbcGroup.pdf
-  w = log(Y_train[,1])
-  mu = 0.1
-  beta = rep(0.1, p)
-  sigSq = 0.5
-  tauSq = rep(0.4, p)
-  lambdaSq = 100
-  betaC = rep(0.11, 0)
-  startValues = list(w=w, beta=beta, tauSq=tauSq, mu=mu, sigSq=sigSq,
-  lambdaSq=lambdaSq, betaC=betaC)
+  startValues = list(
+    w = log(Y_train[,1]),
+    beta = rep(2, p),
+    tauSq = rep(0.4, p),
+    mu = 0.1,
+    sigSq = 0.5,
+    lambdaSq = 100,
+    betaC = rep(0.11, 0)
+  )
+
   
   # MCMC parameters format __ CHANGE __ 
   mcmcParams = list(
     run = list(
-      numReps = 100,
-      thin = 5, # Update params every n steps
-      burninPerc = 0.2 # Discard the first ... steps
+      numReps = 5000,
+      thin = 1, # Update params every n steps
+      burninPerc = 0.5 # Discard the first ... steps
     ),
     tuning = list(
-      mu.prop.var = 0.1,
-      sigSq.prop.var = 0.005,
-      L.beC = 50,
+      mu.prop.var = 0.5,
+      sigSq.prop.var = 0.01,
+      L.beC = 100,
       M.beC = 1,
       eps.beC = 0.001,
       L.be = 100,
@@ -243,6 +224,32 @@ psbc_reg = function(df_sim, p, g) {
   )
   
   fit_bayes_aft = aftGL_LT(Y_train, X_train, XC, grpInx, hyperParams, startValues, mcmcParams)
+  
+  beta_samples = fit_bayes_aft$beta.p
+
+  # Convert to long format
+  beta_long = beta_samples %>%
+    as.data.frame() %>%
+    mutate(iteration = row_number()) %>%
+    pivot_longer(cols = -iteration, 
+                 names_to = "beta_index", 
+                 values_to = "value") %>%
+    mutate(beta_index = factor(beta_index, levels = paste0("V", 1:ncol(beta_samples))))
+  
+  # Create boxplot
+  plt = ggplot(beta_long, aes(x = beta_index, y = value)) +
+    geom_boxplot(fill = "lightblue", alpha = 0.7) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(
+      title = "Posterior Distributions of Beta Coefficients",
+      x = "Beta Index",
+      y = "Coefficient Value"
+    ) +
+    theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(plt)
+
   
   # Extract betas using the maximum likelihood via density
   get_mode = function(x){
@@ -279,17 +286,37 @@ psbc_reg = function(df_sim, p, g) {
     df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
   }
   
-  p = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
+  plt = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
     geom_point() +
     geom_abline(color = 'red') +
     theme_minimal()
   
-  print(p)
+  print(plt)
+  
   
   # Get the RMSE
   pred_RMSE = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
   
-  beta_RMSE = NA #sqrt(mean((betas$beta - true_betas$beta)^2))
+  beta_RMSE =sqrt(mean((betas - true_betas$beta)^2))
+  
+  # Plot difference between true and estimates betas
+  true_betas$betahat = betas
+  
+  plt = true_betas %>%
+    mutate(index = 1:p) %>%
+    ggplot(aes(x = index)) +
+    # Vertical lines between pred and actual
+    geom_segment(aes(xend = index, y = beta, yend = betahat), color = "gray") +
+    geom_point(aes(y = beta, color = "True")) +
+    geom_point(aes(y = betahat, color = "Predicted")) +
+    scale_color_manual(values = c("True" = "black", "Predicted" = "skyblue"),
+                       name = "Type") +
+    ylab("β") +
+    xlab("Index") +
+    labs(title = "True vs Predicted β-coefficients for Bayesian AFT", subtitle = glue("RMSE = {beta_RMSE %>% round(4)}")) +
+    theme_minimal()
+  print(plt)
+  
   return(list(prediction = pred_RMSE, coefficients = beta_RMSE))
 
 }
@@ -299,10 +326,10 @@ run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, bf
   print("<<<<GENERATING SIMULATED DATA>>>>")
   df_sim = generate_data(pop_n = pop_n, obs_n = obs_n, p = p, g = g,
                        ltname = ltname, betafrac = bfrac, seed = 123,
-                       force_recalc = F, X_plots = T, a = exp(-9), b = 0.085,
+                       force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
                        X_rho = X_rho, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
                        #active_hazard = 0.025, betasep = 2)
-                       active_hazard = (0.05*sqrt(p))/nzb/bfrac/bsep,
+                       active_hazard = 0, # (0.05*sqrt(p))/nzb/bfrac/bsep,
                        betasep = bsep, bscale = 0.25)
   
   set.seed(seed+1)
@@ -322,18 +349,43 @@ run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, bf
 
 ```{r}
 # p = 20
-rmses = run_experiment(p = 20, g = 4, ltname = "p20_may20", bfrac = 40, seed = 42, nzb = 0.5, bsep = 2, X_rho = 0)
+rmses = run_experiment(p = 20, g = 4, ltname = "p20_may20", bfrac = 40, seed = 42, nzb = 0.75, bsep = 2, X_rho = 0)
 print(rmses)
 
-rmses = run_experiment(p = 60, g = 4, ltname = "p60_may20", bfrac = 40, seed = 43, nzb = 0.5, bsep = 2, X_rho = 0)
+rmses = run_experiment(p = 60, g = 4, ltname = "p60_may20", bfrac = 40, seed = 43, nzb = 0.75, bsep = 2, X_rho = 0)
 print(rmses)
-
-rmses = run_experiment(p = 100, g = 4, ltname = "p100_may20", bfrac = 40, seed = 44, nzb = 0.5, bsep = 2, X_rho = 0)
-print(rmses)
-
-rmses = run_experiment(p = 200, g = 4, ltname = "p200_may20", bfrac = 40, seed = 45, nzb = 0.5, bsep = 2, X_rho = 0)
-print(rmses)
+# 
+# rmses = run_experiment(p = 100, g = 4, ltname = "p100_may20", bfrac = 40, seed = 44, nzb = 0.5, bsep = 2, X_rho = 0)
+# print(rmses)
+# 
+# rmses = run_experiment(p = 200, g = 4, ltname = "p200_may20", bfrac = 10, seed = 45, nzb = 0.5, bsep = 2, X_rho = 0)
+# print(rmses)
 ```
+
+
+Small tests:
+
+```{r}
+source("R/generate_data.R")
+
+nzb = 0.75
+bfrac = 40
+p = 200
+g = 100
+bsep = 4
+df_sim = generate_data(pop_n = 10000, obs_n = 500, p = p, g = g,
+                       ltname = "19may", betafrac = bfrac, seed = 123,
+                       force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
+                       X_rho = 0, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
+                       #active_hazard = 0.025, betasep = 2)
+                       active_hazard = 0,
+                       #active_hazard = (0*sqrt(p))/nzb/bfrac/bsep,
+                       betasep = bsep, bscale = 0.25)
+lt = read_rds("pop_lifetable_19may.rds")
+true_betas = df_sim$true_betas
+df_sim = df_sim$df
+```
+
 
 # Monte carlo
 
@@ -342,9 +394,9 @@ print(rmses)
 # p
 # g
 # 
-MC = replicate(10000, {
-  
-})
+# MC = replicate(10000, {
+#   
+# })
 ```
 
 

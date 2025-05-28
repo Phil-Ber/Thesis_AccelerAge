@@ -112,10 +112,11 @@ create_dataset = function(
   # Check if betas are of length M, and is a numeric/float vector
   
   
-  n_gen <- 10 * n_obs # 5 TIMES as many to ensure I generate enough, because for some T < C => not observed
+  n_gen <- 5 * n_obs # 5 TIMES as many to ensure I generate enough, because for some T < C => not observed
 
   # Generate it in 
-  result = generate_X(n = n_obs, p = M, g = G, rho = X_rho, rho_between = 0, seed = seednr, scale = X_scale, X_plots = X_plots)
+  result = generate_X(n = n_gen, p = M, g = G, rho = X_rho, rho_between = 0, seed = seednr, scale = X_scale, X_plots = X_plots)
+
   X = result$X # Extract X from the list
   
   cnames <- as.character(glue("x{1:M}"))
@@ -284,7 +285,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   beta_df = beta_df %>%
     mutate(beta = if_else(group %in% active_groups,
                           (beta - mean(beta_df$beta[beta_df$group %in% active_groups], 
-                                      na.rm = TRUE)) /beta_denom + active_hazard,
+                                      na.rm = TRUE)) + active_hazard,
                           beta))
   
   # Adjust beta magnitude to have a linear predictor of E[pred] = 0, var = 1
@@ -295,6 +296,24 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # 
   # 
   # print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
+  
+  target_variance = 0.1^2  # Target sd as variance§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+  # Because we assume X ~ N(0,1)
+  # We try to set Var(XB) -> B'Var(X)B -> B'1B -> ||B^2||
+  
+  # Then we set it so some v to rescale this
+  # v ||B^2|| = target
+  # v = target / ||B^2||
+  # sqrt(v) = sqrt(target / ||B^2||)
+  current_variance = sum(beta_df$beta^2) * 0.2
+  scale_factor = sqrt(target_variance / current_variance)
+  beta_df$beta = beta_df$beta * scale_factor
+  
+  print(glue("Current beta variance: {current_variance}"))
+  print(glue("Target variance: {target_variance}"))
+  print(glue("Scale factor: {scale_factor}"))
+  print(glue("Final beta norm: {sqrt(sum(beta_df$beta^2))}"))
+  
   
   if (plot) {
     heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none", main = "Betas sigma")
@@ -352,6 +371,12 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   # Generate all covariates using block matrix
   # X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
   X = mvrnorm(n, mu = rep(0, p), Sigma =  sigma_var * scale)
+  print(dim(X))
+  
+  X = scale(X, center = TRUE, scale = TRUE) * 0.2
+  X = as.matrix(X)
+  print(dim(X))
+  
   # Vector indicating group memberships
   group_membership = rep(1:g, each = p_g)
   
