@@ -23,12 +23,12 @@ library(psbcGroup)
 # Wrapper
 
 ```{r}
-generate_data = function(pop_n, obs_n, p, g, ltname, betafrac, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho, non_zero_betas, X_scale, active_hazard, betasep, bscale) {
+generate_data = function(pop_n, obs_n, p, g, ltname, seed, force_recalc, X_plots, a = exp(-9), b = 0.085, X_rho, β_rho, non_zero_betas, X_scale, active_hazard, betasep, bscale) {
   
   print("Generating βs...")
   betas = generate_betas(p = p, g=g, rho = β_rho, rho_between = 0,
                          seed = seed, mu_u = betasep, mu_l = -betasep, beta_scale = bscale,
-                         beta_denom = betafrac, plot = T, non_zero_groups = non_zero_betas, active_hazard = active_hazard)
+                         plot = T, non_zero_groups = non_zero_betas, active_hazard = active_hazard)
   
   # betas$beta = betas$beta + 0.01
   
@@ -321,15 +321,15 @@ psbc_reg = function(df_sim, p, g) {
 
 }
 
-run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, bfrac, seed, nzb, bsep, X_rho) {
+run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, seed, nzb, bsep, X_rho) {
   
   print("<<<<GENERATING SIMULATED DATA>>>>")
   df_sim = generate_data(pop_n = pop_n, obs_n = obs_n, p = p, g = g,
-                       ltname = ltname, betafrac = bfrac, seed = 123,
+                       ltname = ltname, seed = 123,
                        force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
                        X_rho = X_rho, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
                        #active_hazard = 0.025, betasep = 2)
-                       active_hazard = 0, # (0.05*sqrt(p))/nzb/bfrac/bsep,
+                       active_hazard = 0, # (0.05*sqrt(p))/nzb/bsep,
                        betasep = bsep, bscale = 0.25)
   
   set.seed(seed+1)
@@ -349,16 +349,16 @@ run_experiment = function(pop_n = 20000, obs_n = 1000, p = 20, g = 4, ltname, bf
 
 ```{r}
 # p = 20
-rmses = run_experiment(p = 20, g = 4, ltname = "p20_may20", bfrac = 40, seed = 42, nzb = 0.75, bsep = 2, X_rho = 0)
+rmses = run_experiment(p = 20, g = 4, ltname = "p20_may20", seed = 42, nzb = 0.75, bsep = 2, X_rho = 0)
 print(rmses)
 
-rmses = run_experiment(p = 60, g = 4, ltname = "p60_may20", bfrac = 40, seed = 43, nzb = 0.75, bsep = 2, X_rho = 0)
+rmses = run_experiment(p = 60, g = 4, ltname = "p60_may20", seed = 43, nzb = 0.75, bsep = 2, X_rho = 0)
 print(rmses)
 # 
-# rmses = run_experiment(p = 100, g = 4, ltname = "p100_may20", bfrac = 40, seed = 44, nzb = 0.5, bsep = 2, X_rho = 0)
+# rmses = run_experiment(p = 100, g = 4, ltname = "p100_may20", seed = 44, nzb = 0.5, bsep = 2, X_rho = 0)
 # print(rmses)
 # 
-# rmses = run_experiment(p = 200, g = 4, ltname = "p200_may20", bfrac = 10, seed = 45, nzb = 0.5, bsep = 2, X_rho = 0)
+# rmses = run_experiment(p = 200, g = 4, ltname = "p200_may20", seed = 45, nzb = 0.5, bsep = 2, X_rho = 0)
 # print(rmses)
 ```
 
@@ -369,18 +369,17 @@ Small tests:
 source("R/generate_data.R")
 
 nzb = 0.75
-bfrac = 40
-p = 200
-g = 100
+p = 20
+g = 5
 bsep = 4
 df_sim = generate_data(pop_n = 10000, obs_n = 500, p = p, g = g,
-                       ltname = "19may", betafrac = bfrac, seed = 123,
+                       ltname = "19may", seed = 124,
                        force_recalc = T, X_plots = T, a = exp(-9), b = 0.085,
-                       X_rho = 0, β_rho = 0.9, non_zero_betas = nzb, X_scale = 1,
+                       X_rho = 0, β_rho = 0.9, non_zero_betas = nzb, X_scale = 0.2,
                        #active_hazard = 0.025, betasep = 2)
                        active_hazard = 0,
-                       #active_hazard = (0*sqrt(p))/nzb/bfrac/bsep,
-                       betasep = bsep, bscale = 0.25)
+                       #active_hazard = (0*sqrt(p))/nzb/bsep,
+                       betasep = bsep, bscale = 1)
 lt = read_rds("pop_lifetable_19may.rds")
 true_betas = df_sim$true_betas
 df_sim = df_sim$df

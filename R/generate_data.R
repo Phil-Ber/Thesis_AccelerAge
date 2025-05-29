@@ -217,12 +217,12 @@ sim_grouped_betas_pberends = function(p, g) {
 
 
 generate_betas = function(p, g, rho, rho_between, seed,
-                          mu_u, mu_l, beta_scale, beta_denom, plot,
+                          mu_u, mu_l, beta_scale, plot,
                           non_zero_groups, active_hazard) {
   
   # # debug
   # p = 200; g = 20; rho = 0.9; rho_between = 0.2; seed = 123; mu_u = 2; mu_l = -2
-  # beta_scale = 0.5; beta_denom = 20; plot = T; non_zero_groups = 0.5
+  # beta_scale = 0.5; plot = T; non_zero_groups = 0.5
   
   if (!is.null(seed)) set.seed(seed)
   library(MASS)
@@ -297,7 +297,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # 
   # print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
   
-  target_variance = 0.1^2  # Target sd as variance§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§§
+  target_variance = 0.2^2  # Target sd as variance
   # Because we assume X ~ N(0,1)
   # We try to set Var(XB) -> B'Var(X)B -> B'1B -> ||B^2||
   
@@ -309,11 +309,8 @@ generate_betas = function(p, g, rho, rho_between, seed,
   scale_factor = sqrt(target_variance / current_variance)
   beta_df$beta = beta_df$beta * scale_factor
   
-  print(glue("Current beta variance: {current_variance}"))
-  print(glue("Target variance: {target_variance}"))
-  print(glue("Scale factor: {scale_factor}"))
-  print(glue("Final beta norm: {sqrt(sum(beta_df$beta^2))}"))
-  
+  print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
+  print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
   
   if (plot) {
     heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none", main = "Betas sigma")
@@ -371,12 +368,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   # Generate all covariates using block matrix
   # X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
   X = mvrnorm(n, mu = rep(0, p), Sigma =  sigma_var * scale)
-  print(dim(X))
-  
-  X = scale(X, center = TRUE, scale = TRUE) * 0.2
-  X = as.matrix(X)
-  print(dim(X))
-  
+
   # Vector indicating group memberships
   group_membership = rep(1:g, each = p_g)
   
