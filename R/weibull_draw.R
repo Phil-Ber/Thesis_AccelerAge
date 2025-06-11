@@ -14,7 +14,7 @@ inverse_weib_baseline_surv <- function(s, lambda, nu){
   return((-(1/lambda) * log(s))^(1/nu))
 }
 
-rweibull <- function(n, lambda, nu, linpred){
+rweibull_custom <- function(n, lambda, nu, linpred){
   u <- runif(n)
   lambda <- lambda * exp(linpred)
   return(( - (log(u) / lambda) )^(1/nu))

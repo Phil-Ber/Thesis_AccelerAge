@@ -8,7 +8,7 @@ source("R/bioage_estimate_median.R")
 source("R/gompertz_draw.R")
 source("R/weibull_draw.R")
 
-generate_population_lifetable = function(
+generate_population_lifetable_gompertz = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
     ################################################################
     #### Create lifetable for population
@@ -38,7 +38,7 @@ generate_population_lifetable = function(
     for (i in 1:N_pop){
       t_i = rgompertz_aft(1, sigma = sigma, tau = tau, linpred = linpred[i]) # vector of ages-of-death
       if (t_i > 150) { # If the age-of-death > 150, we assume 150
-        t_i = 150
+       t_i = 150
       }
       t[i] = t_i
     }
@@ -62,13 +62,7 @@ generate_population_lifetable = function(
     xx = seq(0,max(lifetable_pop$t), by = 0.11)
     lt = as.data.frame(cbind(t = xx, mrl =  predict(fitsmooth, data.frame(t=xx))))
     
-    #M  Montecarlo trials
-    #p number of coefficents
-    # estBetaBayes=matrix(NA,M,p)
-    # estBetaEha=matrix(NA,M,p)
-    # for( i in 1:M){
-    #   set.seed(i)
-    # }
+
     # Save lifetable to R object
     saveRDS(lt, path)
   } else {
@@ -83,11 +77,11 @@ generate_population_lifetable = function(
       y = "Mean Residual Life"
     ) +
     theme_minimal()
+  true_lt <<- lt
   return(lt)
 }
 
-
-create_dataset = function(
+create_dataset_gompretz = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
     ################################################################
     #### Create data set 
@@ -175,7 +169,205 @@ create_dataset = function(
   df_sim$follow_up_time <- df_sim$yrs_rem
   df_sim$follow_up_time[wh] <- followup
   df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
+  true_df_sim <<- df_sim
+  return(df_sim)
   
+}
+
+
+generate_population_lifetable_weibull = function(
+    # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
+  ################################################################
+  #### Altered lifetable function for Weibull generation
+  ################################################################
+  N_pop = 1e5,            # Size of theoretical population
+  M = 3,                  # Number of predictors
+  betas,                  # Vector of coefficients (length should be M)
+  a = 5,                  # Weibull Shape
+  b = 80,                 # Weibull Scale
+  filename = "",          # Optional filename for saving the lifetable
+  seed = 123,             # Seed for random number generation (default 123)
+  force_recalc = F,       # Force recalculation even if file exists
+  X                       # Matrix of samples
+  
+) {
+  shape = a
+  scale = b
+  path = glue("pop_lifetable_{filename}.rds")
+  if (!file.exists(path) || force_recalc) {
+    # Ages
+    set.seed(seed)
+    # X = matrix( rnorm(N_pop*M,mean=0,sd=1), N_pop, M) # matrix of predictors
+    # Generate X -> Beta
+    
+    linpred = (as.matrix(X) %*% as.matrix(betas))
+    
+    
+    # Generate survival times using Weibull #????
+    #t = stats::rweibull(N_pop, shape = shape, scale = scale * exp(linpred))
+    
+    
+    # Why lambda and nu instead of shape and scale??
+    # lambda = ...
+    # nu = ...
+    
+    lambda <- scale^(-shape) # Bender parameterization
+    nu <- shape
+    
+    
+    t = vector(length = N_pop)                                                     
+    for (i in 1:N_pop){
+      t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
+      if (t_i > 150) { # If the age-of-death > 150, we assume 150
+        t_i = 150
+      }
+      t[i] = t_i
+    }
+    
+    print(glue("Range of death: {range(t)}"))
+    
+    plot(ecdf(t), xlim = c(0,150), main = "Cumulative of mortality")
+    
+    lifetable_pop = as.data.frame(cbind(X, t))
+    lifetable_pop = lifetable_pop[order(lifetable_pop$t),]
+    
+    
+    mrl = vector(length = N_pop)
+    for (j in 1:N_pop){
+      mrl[j] = mean(lifetable_pop$t[j:N_pop]) - lifetable_pop$t[j]
+    }
+    
+    lifetable_pop$mrl = mrl
+    
+    # smoothen 
+    fitsmooth = scam(mrl ~ s(t, bs = "mpd"), data = lifetable_pop)
+    xx = seq(0,max(lifetable_pop$t), by = 0.11)
+    lt = as.data.frame(cbind(t = xx, mrl =  predict(fitsmooth, data.frame(t=xx))))
+    
+
+    # Save lifetable to R object
+    saveRDS(lt, path)
+  } else {
+    # If lifetable exists, read it
+    lt = readRDS(path)
+  }
+  ggplot(lt, aes(x = t, y = mrl)) +
+    geom_line() +
+    labs(title = "Weibull Population Lifetable MRL",
+         x = "Time (t)", y = "Mean Residual Life") +
+    theme_minimal()
+  
+  true_lt <<- lt
+  return(lt)
+}
+
+create_dataset_weibull = function(
+    # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
+  ################################################################
+  #### Altered simulated dataset creation for Weibull distr S 
+  ################################################################
+  M,                                        # number of predictors
+  n_obs,                                    # number of *observed* subjects
+  a, # Weibull Shape
+  b, # Weibull Scale
+  followup,                            # maximum follow‑up time
+  G,                                    # number of groups (for grouped)
+  gsize,                                # group size (for grouped)
+  seednr,                             # seed for reproducibility
+  betas,                         # Pop param
+  lt,
+  X_rho,
+  X_plots,
+  X_scale
+) {
+  
+  shape = a
+  scale = b
+  
+  lambda <- scale^(-shape)
+  nu <- shape
+  
+  n_gen <- 5 * n_obs # 5 TIMES as many to ensure I generate enough, because for some T < C => not observed
+  
+  result = generate_X(n = n_gen, p = M, g = G, rho = X_rho, rho_between = 0, seed = seednr, scale = X_scale, X_plots = X_plots)
+  
+  X = result$X # Extract X from the list
+  
+  cnames <- as.character(glue("x{1:M}"))
+  colnames(X) <- cnames
+  age_start <- runif(n_gen, 20, 80)
+  linpred <- rowSums(sweep(X, 2, betas, "*"))
+  
+ 
+  
+  # Get age of death
+  age_death <- vector(length = n_gen)
+  for (i in 1:n_gen){
+    age_death[i] <- rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i])
+  }
+  
+  # Remove observations that are left-truncated
+  valid_indices <- which(age_start < age_death)
+  
+  # Check if we have enough valid cases
+  if (length(valid_indices) < n_obs) {
+    warning(paste("Only", length(valid_indices), "valid cases where age_start < age_death, but", n_obs, "requested."))
+    # Use all available valid indices
+    indx_obs <- valid_indices
+  } else {
+    # Use the first n_obs valid indices
+    indx_obs <- valid_indices[1:n_obs]
+  }
+  
+  print(glue("Nr of valid indices: {length(valid_indices)}"))
+  
+  # Create the data frame with valid observations only
+  df_sim <- as.data.frame(cbind(X, age_death, age_start, linpred))[indx_obs,]
+  
+  
+  cat("Range of linpred values:", range(linpred), "\n")
+  if(any(is.infinite(exp(linpred)))) {
+    warning("Some exp(linpred) values are Inf - consider scaling betas down further")
+  }
+  
+  # S_weibull_cov <- function(t, shape, scale_adj) { # Weibull function from script
+  #   exp(-(t / scale_adj)^shape)
+  # }
+  
+  # # Get mean residual life
+  # for (i in 1:nrow(df_sim)){
+  #   scale_adj = scale * exp(df_sim$linpred[i])
+  #   mrl_uncon <- integrate(function(u) S_weibull_cov(u, shape, scale_adj), 
+  #                          lower = df_sim$age_start[i], upper = Inf)$value
+  #   s_cond <- S_weibull_cov(df_sim$age_start[i], shape, scale_adj)
+  #   df_sim$mrl[i] <- mrl_uncon / s_cond
+  # }
+  
+
+  
+  for (i in 1:nrow(df_sim)) {
+    mrl_uncon <- integrate(weib_baseline_surv,
+                           lower = (df_sim$age_start[i] * exp(linpred[i])), 
+                           upper=Inf, lambda = lambda, nu = nu)$value
+    s_cond <-  weib_baseline_surv(df_sim$age_start[i] * exp(linpred[i]), 
+                                  lambda = lambda, nu = nu) 
+    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
+  }
+  
+  # Get biological age (via population lifetable)
+  for (i in 1:nrow(df_sim)){
+    df_sim$b_age[i] <- lt$t[ which.min(abs(lt$mrl - df_sim$mrl[i])) ]
+  }
+  
+  # Add censoring 
+  df_sim$yrs_rem <- df_sim$age_death - df_sim$age_start
+  wh <- which(df_sim$yrs_rem > followup) # censored
+  df_sim$status <- 1
+  df_sim$status[wh] <- 0
+  df_sim$follow_up_time <- df_sim$yrs_rem
+  df_sim$follow_up_time[wh] <- followup
+  df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
+  true_df_sim <<- df_sim
   return(df_sim)
   
 }
@@ -218,7 +410,10 @@ sim_grouped_betas_pberends = function(p, g) {
 
 generate_betas = function(p, g, rho, rho_between, seed,
                           mu_u, mu_l, beta_scale, plot,
-                          non_zero_groups, active_hazard) {
+                          non_zero_groups, active_hazard,
+                          weib_shape = 10, weib_scale = 80,
+                          gomp_a = exp(-9), gomp_b = 0.085,
+                          target_snr = 2, method = "weibull") {
   
   # # debug
   # p = 200; g = 20; rho = 0.9; rho_between = 0.2; seed = 123; mu_u = 2; mu_l = -2
@@ -281,36 +476,74 @@ generate_betas = function(p, g, rho, rho_between, seed,
   beta_df = tibble(beta = betas, group = group_membership)
   print(glue("Mean of betas pre-scaling: {mean(beta_df$beta)}"))
   print(glue("{c('Lower', 'Upper')} range of beta values pre-scaling: {range(beta_df$beta)}"))
-  # Scale active betas to make E(betas) = 0.05
+  # Scale active betas to make E(betas) = active_hazard
   beta_df = beta_df %>%
     mutate(beta = if_else(group %in% active_groups,
                           (beta - mean(beta_df$beta[beta_df$group %in% active_groups], 
                                       na.rm = TRUE)) + active_hazard,
                           beta))
   
-  # Adjust beta magnitude to have a linear predictor of E[pred] = 0, var = 1
-  # current_var = sum(beta_df$beta^2)
-  # current_sd = sqrt(current_var)
-  # 
-  # print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
-  # 
-  # 
-  # print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
   
-  target_variance = 0.2^2  # Target sd as variance
-  # Because we assume X ~ N(0,1)
-  # We try to set Var(XB) -> B'Var(X)B -> B'1B -> ||B^2||
+  # target_variance = 0.1^2  # Target SD as variance for linear predictor
+  # # Because we assume X ~ N(0,1)
+  # # We try to set Var(XB) -> B'Var(X)B -> B'1B -> ||B^2||
+  # 
+  # # Then we set it so some v to rescale this
+  # # v ||B^2|| = target
+  # # v = target / ||B^2||
+  # # sqrt(v) = sqrt(target / ||B^2||)
+  # current_variance = sum(beta_df$beta^2) * 0.005
+  # scale_factor = sqrt(target_variance / current_variance)
+  # beta_df$beta = beta_df$beta * scale_factor
   
-  # Then we set it so some v to rescale this
-  # v ||B^2|| = target
-  # v = target / ||B^2||
-  # sqrt(v) = sqrt(target / ||B^2||)
-  current_variance = sum(beta_df$beta^2) * 0.2
-  scale_factor = sqrt(target_variance / current_variance)
+  #  *********** SNR-BASED SCALING *************
+  # Estimate noise variance from baseline distribution
+  n_sim = 1e5
+  
+  X_sample = generate_X(n = 1000, p = p, g = g, rho = 0.9, 
+                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
+  
+  
+  
+  if (method == "weibull") {
+    # lambda_baseline <- weib_scale^(-weib_shape)
+    # nu_baseline <- weib_shape
+    # baseline_T <- rweibull_custom(n_sim, lambda = lambda_baseline, nu = nu_baseline, linpred = 0)
+    # epsilon_var = var((baseline_T))
+    baseline_T <- stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
+    epsilon_var = var(log(baseline_T))
+  } else if (method == "gompertz") {
+    # TODO: IMPLEMENT GOMPERTZ
+  } else {
+    stop("Method must be 'weibull' or 'gompertz'")
+  }
+  
+  linpred_raw = as.matrix(X_sample$X) %*% beta_df$beta
+  
+  # Set target SNR and rescale
+  target_var_linpred = target_snr * epsilon_var
+  current_var_linpred = var(linpred_raw)
+  
+  
+  scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
   beta_df$beta = beta_df$beta * scale_factor
   
+  # Center to preserve baseline average survival
+  beta_df$beta = beta_df$beta - mean(beta_df$beta)
+  #  ************************************
+  
+  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta
+  achieved_snr = var(linpred_final) / epsilon_var
+  
+  
+  
+  print(glue("Method: {method}"))
+  print(glue("Target SNR: {target_snr}"))
+  print(glue("Epsilon variance: {round(epsilon_var, 4)}"))
   print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
   print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
+  print(glue("Achieved SNR: {round(achieved_snr, 2)}"))
+  
   
   if (plot) {
     heatmap(sigma_full, Rowv = NA, Colv = NA, scale = "none", main = "Betas sigma")
@@ -328,6 +561,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
     # Add a horizontal line at y=0 for reference
     abline(h = 0, lty = 2, col = "gray50")
   }
+  true_beta_df <<- beta_df # Save to global var
   return(beta_df)
 }
 
@@ -405,6 +639,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   }
   
   colnames(X_df) = paste0("X", 1:p)
+  true_X_df <<- X_df
   return(list(
     X = X_df,
     group_membership = group_membership
