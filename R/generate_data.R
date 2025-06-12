@@ -122,6 +122,8 @@ create_dataset_gompretz = function(
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
     age_death[i] <- rgompertz_aft(1, sigma = sigma, linpred = linpred[i], tau = tau)
+    # age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
+    
   }
   
   # Remove observations that are left-truncated
@@ -207,9 +209,6 @@ generate_population_lifetable_weibull = function(
     #t = stats::rweibull(N_pop, shape = shape, scale = scale * exp(linpred))
     
     
-    # Why lambda and nu instead of shape and scale??
-    # lambda = ...
-    # nu = ...
     
     lambda <- scale^(-shape) # Bender parameterization
     nu <- shape
@@ -217,7 +216,8 @@ generate_population_lifetable_weibull = function(
     
     t = vector(length = N_pop)                                                     
     for (i in 1:N_pop){
-      t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
+      # t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
+      t_i = stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
       if (t_i > 150) { # If the age-of-death > 150, we assume 150
         t_i = 150
       }
@@ -303,7 +303,8 @@ create_dataset_weibull = function(
   # Get age of death
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
-    age_death[i] <- rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i])
+    # age_death[i] <- rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i])
+    age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
   }
   
   # Remove observations that are left-truncated
@@ -346,12 +347,21 @@ create_dataset_weibull = function(
 
   
   for (i in 1:nrow(df_sim)) {
-    mrl_uncon <- integrate(weib_baseline_surv,
-                           lower = (df_sim$age_start[i] * exp(linpred[i])), 
-                           upper=Inf, lambda = lambda, nu = nu)$value
-    s_cond <-  weib_baseline_surv(df_sim$age_start[i] * exp(linpred[i]), 
-                                  lambda = lambda, nu = nu) 
-    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
+    scale_adj = scale * exp(df_sim$linpred[i])
+    
+    mrl_uncon <- integrate(function(t) {
+      1 - pweibull(t, shape = shape, scale = scale_adj)
+    }, lower = df_sim$age_start[i], upper = Inf)$value
+    
+    s_cond <- 1 - pweibull(df_sim$age_start[i], shape = shape, scale = scale_adj)
+    df_sim$mrl[i] <- mrl_uncon / s_cond
+    
+    # mrl_uncon <- integrate(weib_baseline_surv,
+    #                        lower = (df_sim$age_start[i] * exp(linpred[i])), 
+    #                        upper=Inf, lambda = lambda, nu = nu)$value
+    # s_cond <-  weib_baseline_surv(df_sim$age_start[i] * exp(linpred[i]), 
+    #                               lambda = lambda, nu = nu) 
+    # df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
   }
   
   # Get biological age (via population lifetable)
