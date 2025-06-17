@@ -296,6 +296,45 @@ aft_reg_weibull = function(df_sim, p) {
   betas_est_aft <- fit_aft$coefficients[1:p]
   linpred_aft <- rowSums(sweep(df_sim_test[,1:p], 2, betas_est_aft, "*"))
   
+  # Fit quality plot
+  #t_linpreds = c(min(linpred_aft), mean(linpred_aft), max(linpred_aft))
+  t_linpreds = summary(linpred_aft)[c(1,2,4,5,6)]
+  print(t_linpreds)
+  
+  df_linpreds = data.frame(matrix(rep(NA, 150 * length(t_linpreds)), nrow = 150))
+  colnames(df_linpreds) = names(t_linpreds)
+  
+  # Get curves for the extreme linpreds
+  mrl_linp_test = function(tpoint, shape, scale, linpred) {
+    scale_adj = scale * exp(linpred)
+    mrl_uncon = integrate(function(t) {
+      1 - pweibull(t, shape = shape, scale = scale_adj)
+    }, lower = tpoint, upper = Inf)$value
+    s_cond = 1 - pweibull(tpoint, shape = shape, scale = scale_adj)
+    
+    return(mrl_uncon/s_cond)
+  }
+  
+  
+  t_span = seq(1,150,1)
+  c = 0
+  for (linptype in t_linpreds) {
+    c = c + 1
+    linp_fit = sapply(t_span, function(tpoint) {
+      mrl_linp_test(tpoint = tpoint, shape = shape_est, scale = scale_est, linpred = t_linpreds[c])
+    })
+    df_linpreds[c] = linp_fit
+  }
+  
+  tl = length(t_linpreds)
+  matplot(t_span, df_linpreds, type = 'l', lwd = 3,
+          xlab = "Age (t)", lty = 1:tl, col = 1:tl, ylab = "MRL (t)",
+          main = "Mean Residual Life (MRL)\n for various linear predictor values\n Weibull Bayesian AFT")
+  legend("topright", legend = paste(colnames(df_linpreds), "=", round(t_linpreds %>% as.vector(), 2)),
+         lty = 1:tl, lwd = 2, col = 1:tl)
+  
+  
+  
   
   #  scale^(-shape) == lambda so we use it as est (from Marije's script)
   lambda_est <- scale_est^(-shape_est)
@@ -313,8 +352,11 @@ aft_reg_weibull = function(df_sim, p) {
 
 
     s_cond <- 1 - pweibull(df_sim_test$age_start[i], shape = shape_est, scale = scale_adj)
+
     
-    df_sim_test$pred_mrl[i] <- mrl_uncon / s_cond
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) # * exp(-linpred_aft[i])
+    
+    # cat(mrl_uncon, s_cond, df_sim_test$pred_mrl[i], "\n")
 
     # mrl_uncon <- integrate(weib_baseline_surv, 
     #                       lower = (df_sim_test$age_start[i] * exp(linpred_aft[i])), 
@@ -739,7 +781,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   formula = as.formula(paste("age_end | cens(1 - status) + trunc(lb = age_start) ~", preds))
 
   priors = c(
-    #prior(normal(0,0.5), class = "b"), # I took a wide sd due to convergence problems
+    # prior(normal(0,0.5), class = "b"), # I took a wide sd due to convergence problems
     prior(horseshoe(df = 3, par_ratio = 0.1), class = "b"), # WOW!!!
     prior(normal(log(80), 0.2), class = Intercept), # about human life expectancy
     # prior(normal(10, 4), class = shape) # Hazard: bad, gamma better?
@@ -753,8 +795,8 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     family = weibull(),
     prior = priors,
     # warmup = 250, 
-    iter = 6000, chains = 2, cores = 2,
-    control = list(adapt_delta = 0.97, max_treedepth = 15, stepsize = 0.01),
+    iter = 40000, chains = 2, cores = 2,
+    control = list(adapt_delta = 0.95, max_treedepth = 12, stepsize = 0.1),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
     backend = "cmdstanr",
@@ -778,13 +820,52 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   beta_cols = paste0("b_x", 1:p)
   betahat = apply(post[, beta_cols], 2, mean)
   
-  X_test = df_sim_test[,1:p] %>% as.matrix
-  linpred = X_test %*% betahat
+  # X_test = df_sim_test[,1:p] %>% as.matrix
+  # linpred = X_test %*% betahat
+  linpred = rowSums(sweep(df_sim_test[,1:p], 2, betahat, "*"))
   
   shape_est = (mean(post$shape)) # Not exp because not in log scale????
   cat("Shape estimate:", shape_est, "\n")
   scale_est = exp(mean(post$b_Intercept))
   cat("Scale estimate", (scale_est), "\n")
+  
+  
+   # Fit quality plot
+  #t_linpreds = c(min(linpred_aft), mean(linpred_aft), max(linpred_aft))
+  t_linpreds = summary(linpred)[c(1,2,4,5,6)]
+  print(t_linpreds)
+  
+  df_linpreds = data.frame(matrix(rep(NA, 150 * length(t_linpreds)), nrow = 150))
+  colnames(df_linpreds) = names(t_linpreds)
+  
+  # Get curves for the extreme linpreds
+  mrl_linp_test = function(tpoint, shape, scale, linpred) {
+    scale_adj = scale * exp(linpred)
+    mrl_uncon = integrate(function(t) {
+      1 - pweibull(t, shape = shape, scale = scale_adj)
+    }, lower = tpoint, upper = Inf)$value
+    s_cond = 1 - pweibull(tpoint, shape = shape, scale = scale_adj)
+    
+    return(mrl_uncon/s_cond)
+  }
+  
+
+  t_span = seq(1,150,1)
+  c = 0
+  for (linptype in t_linpreds) {
+    c = c + 1
+    linp_fit = sapply(t_span, function(tpoint) {
+      mrl_linp_test(tpoint = tpoint, shape = shape_est, scale = scale_est, linpred = t_linpreds[c])
+    })
+    df_linpreds[c] = linp_fit
+  }
+  
+  tl = length(t_linpreds)
+  matplot(t_span, df_linpreds, type = 'l', lwd = 3,
+          xlab = "Age (t)", lty = 1:tl, col = 1:tl, ylab = "MRL (t)",
+          main = "Mean Residual Life (MRL)\n for various linear predictor values\n Weibull Frequentist AFT")
+  legend("topright", legend = paste(colnames(df_linpreds), "=", round(t_linpreds %>% as.vector(), 2)),
+         lty = 1:tl, lwd = 2, col = 1:tl)
   
   #### ESTIMATE MRL
   #  scale^(-shape) == lambda so we use it as est (from marijes script)
@@ -794,7 +875,6 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   
   for (i in 1:nrow(df_sim_test)) {
     scale_adj = scale_est * exp(linpred[i])
-    cat("exp linpred scale", i, ":", scale_adj, ",", "shape and sale est:", shape_est, scale_est, "\n")
     
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape_est, scale = scale_adj)
@@ -804,7 +884,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     s_cond <- 1 - pweibull(df_sim_test$age_start[i], shape = shape_est, scale = scale_adj)
     
     # Mean residual life
-    df_sim_test$pred_mrl[i] <- mrl_uncon / s_cond
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) #  * exp(-linpred[i])
 
     # mrl_uncon <- integrate(weib_baseline_surv,
     #                        lower = (df_sim_test$age_start[i] * exp(linpred[i])), 
@@ -1096,7 +1176,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
   
   cat("Data generated successfully!\n")
   cat("Dataset size:", nrow(gres$df), "x", ncol(gres$df), "\n\n")
-  
+
   if (!perf_A) {
     return(gres)
   }
@@ -1232,20 +1312,35 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 }
 ```
 
-## Method: Weibull; p = 20; $n \in \{250, 500\}$; $r_{nz} \in \{ 1\}$ 
+## Method: Weibull; p = 20; $n \in \{125, 250, 500, 2000\}$; $r_{nz} \in \{ 1\}$ 
 
-### n = 250
+### n = 125
+
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 250, p = 20, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>%
+debug_methods(n = 125, p = 80, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 1) %>%
+  system.time()
+```
+
+
+### n = 250
+```{r}
+debug_methods(n = 250, p = 4, g = 4, method = "weibull", seed = 40, t_SNR = 0, perf_A = T, nzg = 0.1) %>%
   system.time()
 ```
 
 ### n = 500
 
 ```{r}
-debug_methods(n = 500, p = 20, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>%
+debug_methods(n = 500, p = 20, g = 10, method = "weibull", seed = 40, t_SNR = 0.5, perf_A = T, nzg = 0.5) %>%
+  system.time()
+```
+
+### n = 1000
+
+```{r}
+debug_methods(n = 1000, p = 20, g = 10, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.5) %>%
   system.time()
 ```
 
@@ -1255,42 +1350,30 @@ debug_methods(n = 500, p = 20, g = 5, method = "weibull", seed = 40, t_SNR = 4, 
 ### n = 250
 
 ```{r}
-debug_methods(n = 250, p = 100, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>%
+debug_methods(n = 250, p = 100, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 1) %>%
   system.time()
 ```
 
 ### n = 500
 
 ```{r}
-debug_methods(n = 500, p = 100, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>%
+debug_methods(n = 1000, p = 60, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.4) %>%
   system.time()
 ```
 
-## Method: Weibull; p = 200; $n \in \{250, 500\}$; $r_{nz} \in \{1\}$ 
 
-I will not do because takes too long!
+```{r}
 
-<!-- ### n = 250 -->
-
-<!-- ```{r} -->
-<!-- debug_methods(n = 250, p = 200, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>% -->
-<!--   system.time() -->
-
-<!-- ``` -->
+```
 
 
 
-<!-- ### n = 500 -->
+## High-dim
 
-<!-- ```{r} -->
-<!-- debug_methods(n = 500, p = 200, g = 5, method = "weibull", seed = 40, t_SNR = 4, perf_A = T, nzg = 1) %>% -->
-<!--   system.time() -->
-
-<!-- ``` -->
-
-
-
-
+```{r}
+debug_methods(n = 500, p = 1000, g = 100, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.1) %>%
+  system.time()
+```
 
 
 

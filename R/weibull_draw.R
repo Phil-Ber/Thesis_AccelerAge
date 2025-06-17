@@ -30,3 +30,8 @@ rcweibull <- function(n, lambda, nu, linpred, s){
 weib_PH_surv <- function(t, lambda, nu, linpred){
   weib_baseline_surv(t, lambda, nu) ^ exp(linpred)
 }
+
+# Weibull survival with covariate-adjusted scale
+S_weibull_cov <- function(t, shape, scale_adj) {
+  exp(-(t / scale_adj)^shape)
+}

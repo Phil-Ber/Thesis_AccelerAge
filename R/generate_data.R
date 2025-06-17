@@ -37,9 +37,9 @@ generate_population_lifetable_gompertz = function(
     t = vector(length = N_pop)                                                     
     for (i in 1:N_pop){
       t_i = rgompertz_aft(1, sigma = sigma, tau = tau, linpred = linpred[i]) # vector of ages-of-death
-      if (t_i > 150) { # If the age-of-death > 150, we assume 150
-       t_i = 150
-      }
+      # if (t_i > 150) { # If the age-of-death > 150, we assume 150
+      #  t_i = 150
+      # }
       t[i] = t_i
     }
     
@@ -218,9 +218,9 @@ generate_population_lifetable_weibull = function(
     for (i in 1:N_pop){
       # t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
       t_i = stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
-      if (t_i > 150) { # If the age-of-death > 150, we assume 150
-        t_i = 150
-      }
+      # if (t_i > 150) { # If the age-of-death > 150, we assume 150
+      #   t_i = 150
+      # }
       t[i] = t_i
     }
     
@@ -303,7 +303,7 @@ create_dataset_weibull = function(
   # Get age of death
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
-    # age_death[i] <- rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i])
+    # age_death[i] <- S_weibull_cov(t = linpred[i], shape = shape, scale_adj = scale * linpred[i])
     age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
   }
   
@@ -352,16 +352,15 @@ create_dataset_weibull = function(
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape, scale = scale_adj)
     }, lower = df_sim$age_start[i], upper = Inf)$value
-    
+
     s_cond <- 1 - pweibull(df_sim$age_start[i], shape = shape, scale = scale_adj)
-    df_sim$mrl[i] <- mrl_uncon / s_cond
+    df_sim$mrl[i] <- (mrl_uncon / s_cond)
     
-    # mrl_uncon <- integrate(weib_baseline_surv,
-    #                        lower = (df_sim$age_start[i] * exp(linpred[i])), 
-    #                        upper=Inf, lambda = lambda, nu = nu)$value
-    # s_cond <-  weib_baseline_surv(df_sim$age_start[i] * exp(linpred[i]), 
-    #                               lambda = lambda, nu = nu) 
-    # df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
+    # s_t <- S_weibull_cov(t_vec, shape, scale_i)
+    # integral <- sapply(t_vec, function(ti) {
+    #   integrate(function(u) S_weibull_cov(u, shape, scale_i), lower = ti, upper = Inf)$value
+    # })
+    # mrl <- integral / s_t
   }
   
   # Get biological age (via population lifetable)
@@ -510,7 +509,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # Estimate noise variance from baseline distribution
   n_sim = 1e5
   
-  X_sample = generate_X(n = 1000, p = p, g = g, rho = 0.9, 
+  X_sample = generate_X(n = 1000, p = length(active_groups) *p_g, g = round(non_zero_groups * g), rho = 0.9,  # X_rho kept at 0.9 through code
                         rho_between = 0, seed = seed, scale = 1, X_plots = F)
   
   
@@ -527,8 +526,10 @@ generate_betas = function(p, g, rho, rho_between, seed,
   } else {
     stop("Method must be 'weibull' or 'gompertz'")
   }
+  print(length(beta_df$beta[beta_df$group %in% active_groups]))
+  print(dim(as.matrix(X_sample$X)))
   
-  linpred_raw = as.matrix(X_sample$X) %*% beta_df$beta
+  linpred_raw = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
   
   # Set target SNR and rescale
   target_var_linpred = target_snr * epsilon_var
@@ -539,11 +540,13 @@ generate_betas = function(p, g, rho, rho_between, seed,
   beta_df$beta = beta_df$beta * scale_factor
   
   # Center to preserve baseline average survival
-  beta_df$beta = beta_df$beta - mean(beta_df$beta)
+  beta_df$beta[beta_df$group %in% active_groups] = 
+    beta_df$beta[beta_df$group %in% active_groups] -
+    mean(beta_df$beta[beta_df$group %in% active_groups])
   #  ************************************
   
-  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta
-  achieved_snr = var(linpred_final) / epsilon_var
+  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
+  achieved_snr = var(linpred_final) / target_var_linpred
   
   
   
