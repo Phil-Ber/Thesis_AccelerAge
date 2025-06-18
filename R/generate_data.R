@@ -8,16 +8,16 @@ source("R/bioage_estimate_median.R")
 source("R/gompertz_draw.R")
 source("R/weibull_draw.R")
 
+#### GOMPERTZ (NOT DONE)####
+
 generate_population_lifetable_gompertz = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
-    ################################################################
     #### Create lifetable for population
-    ################################################################
     N_pop = 1e5,            # Size of theoretical population
     M = 3,                  # Number of predictors
     betas = c(-1,0,1),      # Vector of coefficients (length should be M)
-    a = exp(-9),                              # Gompertz baseline param
-    b = 0.085,                                # Gompertz baseline param
+    a = exp(-9),            # Gompertz baseline param
+    b = 0.085,              # Gompertz baseline param
     filename = "",          # Optional filename for saving the lifetable
     seed = 123,             # Seed for random number generation (default 123)
     force_recalc = F,       # Force recalculation even if file exists
@@ -83,9 +83,8 @@ generate_population_lifetable_gompertz = function(
 
 create_dataset_gompretz = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
-    ################################################################
+
     #### Create data set 
-    ################################################################
     M,                                        # number of predictors
     n_obs,                                    # number of *observed* subjects
     a,                              # Gompertz baseline param
@@ -176,12 +175,11 @@ create_dataset_gompretz = function(
   
 }
 
+#### WEIBULL ####
 
 generate_population_lifetable_weibull = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
-  ################################################################
   #### Altered lifetable function for Weibull generation
-  ################################################################
   N_pop = 1e5,            # Size of theoretical population
   M = 3,                  # Number of predictors
   betas,                  # Vector of coefficients (length should be M)
@@ -217,10 +215,25 @@ generate_population_lifetable_weibull = function(
     t = vector(length = N_pop)                                                     
     for (i in 1:N_pop){
       # t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
-      t_i = stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
-      # if (t_i > 150) { # If the age-of-death > 150, we assume 150
-      #   t_i = 150
-      # }
+      t_i = stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
+      # ---
+      # Take the opposite sign of linpred, as we expect that the exp
+      # of a negative value returns a lower value than 1 -> person ages slower;
+      # death is more likely to occur later!
+      # Example of when linpred = -0.2:
+      
+      # plot(pweibull(seq(0,120, 0.01), shape = 10, scale = 80))
+      # lines(pweibull(seq(0,120, 0.01), shape = 10, scale = 80 * exp(-(-0.2))), col = "green", lwd = 2)
+      
+      # Here the person is ageing ~0.81 speed of normal -> Line shifts to right
+      # This would be the same as doing:
+      
+      # plot(pweibull(seq(0,120, 0.01), shape = 10, scale = 80))
+      # lines(pweibull(seq(0,120, 0.01) * exp(-0.2), shape = 10, scale = 80), col = "green", lwd = 10)
+      # lines(pweibull(seq(0,120, 0.01), shape = 10, scale = 80 * exp(-(-0.2))), col = "blue", lwd = 3)
+      
+      # But in the shape it needs to be the opposite sign.
+      # ---
       t[i] = t_i
     }
     
@@ -261,11 +274,10 @@ generate_population_lifetable_weibull = function(
   return(lt)
 }
 
+
 create_dataset_weibull = function(
     # Source: https://github.com/marije-sluiskes/fitting-accelerage-framework-in-r/blob/main/AccelerAge-framework-illustration.md
-  ################################################################
   #### Altered simulated dataset creation for Weibull distr S 
-  ################################################################
   M,                                        # number of predictors
   n_obs,                                    # number of *observed* subjects
   a, # Weibull Shape
@@ -303,8 +315,7 @@ create_dataset_weibull = function(
   # Get age of death
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
-    # age_death[i] <- S_weibull_cov(t = linpred[i], shape = shape, scale_adj = scale * linpred[i])
-    age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
+    age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
   }
   
   # Remove observations that are left-truncated
@@ -347,7 +358,7 @@ create_dataset_weibull = function(
 
   
   for (i in 1:nrow(df_sim)) {
-    scale_adj = scale * exp(df_sim$linpred[i])
+    scale_adj = scale * exp(-df_sim$linpred[i])
     
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape, scale = scale_adj)
@@ -382,40 +393,40 @@ create_dataset_weibull = function(
 }
 
 
-sim_grouped_betas_pberends = function(p, g) {
-  # Function I created to experiment with grouped random variable creation
-  # Overly complex for no reason????
-  p_g = p/g
-  
-  # Generate hyperspace
-  anchors = matrix(data = runif(g^2,-4,4), nrow = g, ncol = g)
-  anchors = anchors %>% apply(MARGIN = 2, FUN = cummean)
-  # magnitudes = rnorm(g)
-  
-  # anchors = anchors %*% diag(magnitudes)
-  group_shift = rnorm(g, mean = 0, sd = 40)  # Increase sd for more spread
-  
-  # Jittered values will be of mean anchor and sd magnitude
-  betas = matrix(NA, nrow = g, ncol = p)
-  for (group in 0:(g-1)) {
-    for (beta in 1:p_g) {
-      mu = anchors[, group + 1]
-      sigma = 1 #sqrt(sum(mu^2))
-      beta_g = rnorm(length(mu), mean = mu, sd = sigma)
-      betas[,group*p_g+beta] = beta_g
-    }
-  }
-  # bring down to one dimension (1 x p from g x p)
-  betas = as.tibble(t(matrix(1,1,g) %*% betas))
-  betas = betas + rep(group_shift, each = p_g)
-  
-  betas$group = as.factor(rep(1:g, each = p_g))
-  colnames(betas)[1] = "beta"
-  betas$beta = scale(betas$beta, center = F)
-  return(betas)
-}
+# sim_grouped_betas_pberends = function(p, g) {
+#   # Function I created to experiment with grouped random variable creation
+#   # Overly complex
+#   p_g = p/g
+#   
+#   # Generate hyperspace
+#   anchors = matrix(data = runif(g^2,-4,4), nrow = g, ncol = g)
+#   anchors = anchors %>% apply(MARGIN = 2, FUN = cummean)
+#   # magnitudes = rnorm(g)
+#   
+#   # anchors = anchors %*% diag(magnitudes)
+#   group_shift = rnorm(g, mean = 0, sd = 40)  # Increase sd for more spread
+#   
+#   # Jittered values will be of mean anchor and sd magnitude
+#   betas = matrix(NA, nrow = g, ncol = p)
+#   for (group in 0:(g-1)) {
+#     for (beta in 1:p_g) {
+#       mu = anchors[, group + 1]
+#       sigma = 1 #sqrt(sum(mu^2))
+#       beta_g = rnorm(length(mu), mean = mu, sd = sigma)
+#       betas[,group*p_g+beta] = beta_g
+#     }
+#   }
+#   # Bring down to one dimension (1 x p from g x p)
+#   betas = as.tibble(t(matrix(1,1,g) %*% betas))
+#   betas = betas + rep(group_shift, each = p_g)
+#   
+#   betas$group = as.factor(rep(1:g, each = p_g))
+#   colnames(betas)[1] = "beta"
+#   betas$beta = scale(betas$beta, center = F)
+#   return(betas)
+# }
 
-
+#### BIOMARKER DATA ####
 
 generate_betas = function(p, g, rho, rho_between, seed,
                           mu_u, mu_l, beta_scale, plot,
@@ -509,10 +520,10 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # Estimate noise variance from baseline distribution
   n_sim = 1e5
   
-  X_sample = generate_X(n = 1000, p = length(active_groups) *p_g, g = round(non_zero_groups * g), rho = 0.9,  # X_rho kept at 0.9 through code
+  X_sample = generate_X(n = n_sim, p = length(active_groups) *p_g, g = round(non_zero_groups * g), rho = 0,  # X_rho kept at 0 through code
                         rho_between = 0, seed = seed, scale = 1, X_plots = F)
   
-  
+   
   
   if (method == "weibull") {
     # lambda_baseline <- weib_scale^(-weib_shape)
@@ -526,9 +537,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   } else {
     stop("Method must be 'weibull' or 'gompertz'")
   }
-  print(length(beta_df$beta[beta_df$group %in% active_groups]))
-  print(dim(as.matrix(X_sample$X)))
-  
+
   linpred_raw = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
   
   # Set target SNR and rescale
@@ -546,6 +555,9 @@ generate_betas = function(p, g, rho, rho_between, seed,
   #  ************************************
   
   linpred_final = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
+  print("VARS:")
+  print(var(linpred_final))
+  print(target_var_linpred)
   achieved_snr = var(linpred_final) / target_var_linpred
   
   
@@ -588,7 +600,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   p_g = p/g
   n_g = n/g
   
-  # --------------Create a block Toeplitz matrix for X--------------
+  # Create a block Toeplitz matrix for X
   sigma_var = matrix(0, p, p)
   
   # Fill each block based on its distance from diagonal
@@ -623,7 +635,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   X_df = as.tibble(X)
   
   
-  # ----------Plot metrics--------------
+  # Plot metrics
   if (X_plots) {
     # Visualize correlation structure
     heatmap(sigma_var, Rowv = NA, Colv = NA, scale = "none", main = "Sigma structure")

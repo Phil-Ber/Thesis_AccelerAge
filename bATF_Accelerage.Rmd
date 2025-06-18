@@ -275,7 +275,7 @@ aft_reg_weibull = function(df_sim, p) {
       formula = aft_formula, 
       data = df_sim_train, 
       dist = "weibull",
-      param = "lifeExp", # Otherwise beta signs are inverted
+      # param = "lifeExp", # Otherwise beta signs are inverted
       control = list(maxit = 100, trace = FALSE)
     )
   }, error = function(e) {
@@ -306,7 +306,7 @@ aft_reg_weibull = function(df_sim, p) {
   
   # Get curves for the extreme linpreds
   mrl_linp_test = function(tpoint, shape, scale, linpred) {
-    scale_adj = scale * exp(linpred)
+    scale_adj = scale * exp(-linpred)
     mrl_uncon = integrate(function(t) {
       1 - pweibull(t, shape = shape, scale = scale_adj)
     }, lower = tpoint, upper = Inf)$value
@@ -344,8 +344,9 @@ aft_reg_weibull = function(df_sim, p) {
   df_sim_test$pred_mrl = NA
   
   for (i in 1:nrow(df_sim_test)) {
-    scale_adj = scale_est * exp(linpred_aft[i])
-
+    scale_adj = scale_est * exp(-linpred_aft[i])
+    
+    # 1 - pweibull is the survivor function
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape_est, scale = scale_adj)
     }, lower = df_sim_test$age_start[i], upper = Inf)$value
@@ -355,7 +356,14 @@ aft_reg_weibull = function(df_sim, p) {
 
     
     df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) # * exp(-linpred_aft[i])
-    
+    # cat("shape_est:", shape_est, "| scale_est:, ", scale_est, "\n")
+    # cat("Age start:", df_sim_test$age_start[i], "\n")
+    # cat("exp(-linpred):", exp(-linpred_aft[i]), "\n")
+    # cat("linpred:", linpred_aft[i], "\n")
+    # cat("mrl_uncon:", mrl_uncon, "\n")
+    # cat("s_cond:", s_cond, "\n")
+    # cat("mrl_uncon / s_cond:", (mrl_uncon / s_cond), "\n")
+    # print("-=-=-=-=-")
     # cat(mrl_uncon, s_cond, df_sim_test$pred_mrl[i], "\n")
 
     # mrl_uncon <- integrate(weib_baseline_surv, 
@@ -784,8 +792,10 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     # prior(normal(0,0.5), class = "b"), # I took a wide sd due to convergence problems
     prior(horseshoe(df = 3, par_ratio = 0.1), class = "b"), # WOW!!!
     prior(normal(log(80), 0.2), class = Intercept), # about human life expectancy
+    #prior(normal(50, 50), class = Intercept), #, # uninformative
     # prior(normal(10, 4), class = shape) # Hazard: bad, gamma better?
     prior(gamma(50, 5), class = shape) # not log scale!! (mean of gamma is a/b)
+    # prior(normal(50, 50), class = shape) # uninformative
   )
 
 
@@ -795,7 +805,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     family = weibull(),
     prior = priors,
     # warmup = 250, 
-    iter = 40000, chains = 2, cores = 2,
+    iter = 10000, chains = 2, cores = 2,
     control = list(adapt_delta = 0.95, max_treedepth = 12, stepsize = 0.1),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
@@ -804,12 +814,12 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     save_pars = save_pars(all = TRUE), init = 0
 
   )
-  # Whenever you see the warning
-  # "There were x divergent transitions after warmup.", you should really think about
+  # "Whenever you see the warning
+  # 'There were x divergent transitions after warmup.', you should really think about
   # increasing adapt_delta. To do this, write control = list(adapt_delta = <x>), where
   # <x> should usually be a value between 0.8 (current default) and 1. Increasing adapt_delta
   # will slow down the sampler but will decrease the number of divergent transitions threatening
-  # the validity of your posterior samples.
+  # the validity of your posterior samples." —
   # https://cran.r-project.org/web/packages/brms/vignettes/brms_overview.pdf
   
   fb <<- fit_bayes_aft
@@ -819,6 +829,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   post = posterior_samples(fit_bayes_aft)
   beta_cols = paste0("b_x", 1:p)
   betahat = apply(post[, beta_cols], 2, mean)
+  betahat = -betahat # because of the exp(-linpred) in generation
   
   # X_test = df_sim_test[,1:p] %>% as.matrix
   # linpred = X_test %*% betahat
@@ -840,7 +851,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   
   # Get curves for the extreme linpreds
   mrl_linp_test = function(tpoint, shape, scale, linpred) {
-    scale_adj = scale * exp(linpred)
+    scale_adj = scale * exp(-linpred)
     mrl_uncon = integrate(function(t) {
       1 - pweibull(t, shape = shape, scale = scale_adj)
     }, lower = tpoint, upper = Inf)$value
@@ -863,7 +874,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   tl = length(t_linpreds)
   matplot(t_span, df_linpreds, type = 'l', lwd = 3,
           xlab = "Age (t)", lty = 1:tl, col = 1:tl, ylab = "MRL (t)",
-          main = "Mean Residual Life (MRL)\n for various linear predictor values\n Weibull Frequentist AFT")
+          main = "Mean Residual Life (MRL) \n for various linear predictor values \n Weibull Bayesian AFT")
   legend("topright", legend = paste(colnames(df_linpreds), "=", round(t_linpreds %>% as.vector(), 2)),
          lty = 1:tl, lwd = 2, col = 1:tl)
   
@@ -874,7 +885,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   nu_est <- shape_est
   
   for (i in 1:nrow(df_sim_test)) {
-    scale_adj = scale_est * exp(linpred[i])
+    scale_adj = scale_est * exp(-linpred[i])
     
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape_est, scale = scale_adj)
@@ -959,10 +970,12 @@ run_grid_experiments_mc = function(
   pop_n = 100000,
   bsep = 4,
   X_rho = 0,
-  target_snr = 0.1,
+  target_snr = 4,
   method = "weibull",
   seed_base = 123
 ) {
+  # Filename for experiment running
+  datetime_start = gsub(" ", "_",date())
   
   # Create parameter grid
   param_grid = expand.grid(
@@ -984,7 +997,7 @@ run_grid_experiments_mc = function(
     a = exp(-9)
     b = 0.085
   } else if (method == "weibull") {
-    a = 5 # Shape
+    a = 10 # Shape
     b = 80 # Scale
   }
   
@@ -1010,7 +1023,7 @@ run_grid_experiments_mc = function(
         obs_n = params$n_obs, 
         p = params$p,
         g = params$g,
-        ltname = glue("mc_{.....}", "\n"),
+        ltname = glue("mc{i}_lt"),
         seed = seed, 
         force_recalc = FALSE, # IMPORTANT! SAME LT!
         X_plots = FALSE, 
@@ -1062,11 +1075,11 @@ run_grid_experiments_mc = function(
       
       cat("Done\n")
     }
-    ## TODO: SAVE RESULTS TO FILES IN SOME EXPERIMENT FOLDER
     all_results[[i]] = list(
       params = params,
       mc_results = mc_results
     )
+    write_rds(all_results, file = glue("Experiment:_{datetime_start}.rds"))
   }
   
   return(all_results)
@@ -1083,24 +1096,11 @@ options(mc.cores = 4)
 ## $n \in \{200, 400, 1000\}, p \in \{20\}, g = 5$
 
 ```{r}
-# results = run_grid_experiments_mc(n_grid = c(200), p_grid = c(10), g_grid = c(5), non_zero_grid = c(1), M = 1)
-# rsp = parse_results(all_results = results)
-# plot_results_by_n(all_results = results, target_p = 20)
+results = run_grid_experiments_mc(n_grid = c(200), p_grid = c(10),
+                                  g_grid = c(5), non_zero_grid = c(1), M = 2,
+                                  target_snr = 4, pop_n = 100000, bsep = 4,
+                                  X_rho = 0, method = "weibull", seed_base = 42)
 ```
-
-## $n \in \{200, 400, 1000\}, p \in \{200\}, g = 5$
-
-```{r}
-# results = run_grid_experiments_mc(n_grid = c(400, 800, 2000), p_grid = c(200), g_grid = c(5), non_zero_grid = c(1), M = 1)
-# plot_results_by_n(all_results = results, target_p = 200)
-```
-
-<!-- ## $n \in \{200, 400, 1000\}, p \in \{5000\}, g = 5$ -->
-
-<!-- ```{r} -->
-<!-- results = run_grid_experiments_mc(n_grid = c(400, 800, 2000), p_grid = c(500), g_grid = c(5), non_zero_grid = c(1), M = 1) -->
-<!-- plot_results_by_n(all_results = results, target_p = 500) -->
-<!-- ``` -->
 
 # High dimensional example (p = n)
 
@@ -1319,7 +1319,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 125, p = 80, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 1) %>%
+debug_methods(n = 400, p = 20, g = 5, method = "weibull", seed = 40, t_SNR = 2, perf_A = T, nzg = 1) %>%
   system.time()
 ```
 

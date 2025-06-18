@@ -35,3 +35,9 @@ weib_PH_surv <- function(t, lambda, nu, linpred){
 S_weibull_cov <- function(t, shape, scale_adj) {
   exp(-(t / scale_adj)^shape)
 }
+
+
+rweib_c <- function(n, shape, scale, linpred) {
+  u = runif(n, 0, 150) * exp(linpred) # Point sampled from distr
+  return(dweibull(u, shape, scale))
+}
