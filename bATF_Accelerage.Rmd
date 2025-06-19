@@ -312,7 +312,7 @@ aft_reg_weibull = function(df_sim, p) {
     }, lower = tpoint, upper = Inf)$value
     s_cond = 1 - pweibull(tpoint, shape = shape, scale = scale_adj)
     
-    return(mrl_uncon/s_cond)
+    return((mrl_uncon/s_cond) * exp(-linpred))
   }
   
   
@@ -329,7 +329,7 @@ aft_reg_weibull = function(df_sim, p) {
   tl = length(t_linpreds)
   matplot(t_span, df_linpreds, type = 'l', lwd = 3,
           xlab = "Age (t)", lty = 1:tl, col = 1:tl, ylab = "MRL (t)",
-          main = "Mean Residual Life (MRL)\n for various linear predictor values\n Weibull Bayesian AFT")
+          main = "Mean Residual Life (MRL)\n for various linear predictor values\n Weibull Frequentist AFT")
   legend("topright", legend = paste(colnames(df_linpreds), "=", round(t_linpreds %>% as.vector(), 2)),
          lty = 1:tl, lwd = 2, col = 1:tl)
   
@@ -355,7 +355,7 @@ aft_reg_weibull = function(df_sim, p) {
     s_cond <- 1 - pweibull(df_sim_test$age_start[i], shape = shape_est, scale = scale_adj)
 
     
-    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) # * exp(-linpred_aft[i])
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
     # cat("shape_est:", shape_est, "| scale_est:, ", scale_est, "\n")
     # cat("Age start:", df_sim_test$age_start[i], "\n")
     # cat("exp(-linpred):", exp(-linpred_aft[i]), "\n")
@@ -789,8 +789,8 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   formula = as.formula(paste("age_end | cens(1 - status) + trunc(lb = age_start) ~", preds))
 
   priors = c(
-    # prior(normal(0,0.5), class = "b"), # I took a wide sd due to convergence problems
-    prior(horseshoe(df = 3, par_ratio = 0.1), class = "b"), # WOW!!!
+    prior(normal(0,0.1), class = "b"), # I took a wide sd due to convergence problems
+    # prior(horseshoe(), class = "b"), # WOW!!!
     prior(normal(log(80), 0.2), class = Intercept), # about human life expectancy
     #prior(normal(50, 50), class = Intercept), #, # uninformative
     # prior(normal(10, 4), class = shape) # Hazard: bad, gamma better?
@@ -805,8 +805,8 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     family = weibull(),
     prior = priors,
     # warmup = 250, 
-    iter = 10000, chains = 2, cores = 2,
-    control = list(adapt_delta = 0.95, max_treedepth = 12, stepsize = 0.1),
+    iter = 20000, chains = 2, cores = 2,
+    control = list(adapt_delta = 0.97, max_treedepth = 12, stepsize = 0.1),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
     backend = "cmdstanr",
@@ -857,7 +857,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     }, lower = tpoint, upper = Inf)$value
     s_cond = 1 - pweibull(tpoint, shape = shape, scale = scale_adj)
     
-    return(mrl_uncon/s_cond)
+    return((mrl_uncon/s_cond) * exp(-linpred))
   }
   
 
@@ -895,7 +895,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     s_cond <- 1 - pweibull(df_sim_test$age_start[i], shape = shape_est, scale = scale_adj)
     
     # Mean residual life
-    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) #  * exp(-linpred[i])
+    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
 
     # mrl_uncon <- integrate(weib_baseline_surv,
     #                        lower = (df_sim_test$age_start[i] * exp(linpred[i])), 
@@ -1093,14 +1093,17 @@ options(mc.cores = 4)
 ```
 
 
-## $n \in \{200, 400, 1000\}, p \in \{20\}, g = 5$
+<!-- ## $n \in \{200, 400, 1000\}, p \in \{20\}, g = 5$ -->
 
-```{r}
-results = run_grid_experiments_mc(n_grid = c(200), p_grid = c(10),
-                                  g_grid = c(5), non_zero_grid = c(1), M = 2,
-                                  target_snr = 4, pop_n = 100000, bsep = 4,
-                                  X_rho = 0, method = "weibull", seed_base = 42)
-```
+<!-- ```{r} -->
+<!-- mc1 = function() { -->
+<!--   capture.output(run_grid_experiments_mc(n_grid = c(100), p_grid = c(20,100), -->
+<!--                                   g_grid = c(5, 10), non_zero_gri1d = c(0.5, 1), M = 200, -->
+<!--                                   target_snr = 2, pop_n = 100000, bsep = 4, -->
+<!--                                   X_rho = 0, method = "weibull", seed_base = 42)) -->
+<!-- } -->
+<!-- mc1() -->
+<!-- ``` -->
 
 # High dimensional example (p = n)
 
@@ -1319,7 +1322,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 400, p = 20, g = 5, method = "weibull", seed = 40, t_SNR = 2, perf_A = T, nzg = 1) %>%
+debug_methods(n = 400, p = 100, g = 5, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
   system.time()
 ```
 

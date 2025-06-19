@@ -365,7 +365,7 @@ create_dataset_weibull = function(
     }, lower = df_sim$age_start[i], upper = Inf)$value
 
     s_cond <- 1 - pweibull(df_sim$age_start[i], shape = shape, scale = scale_adj)
-    df_sim$mrl[i] <- (mrl_uncon / s_cond)
+    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-df_sim$linpred[i])
     
     # s_t <- S_weibull_cov(t_vec, shape, scale_i)
     # integral <- sapply(t_vec, function(ti) {
