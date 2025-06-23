@@ -789,8 +789,8 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   formula = as.formula(paste("age_end | cens(1 - status) + trunc(lb = age_start) ~", preds))
 
   priors = c(
-    prior(normal(0,0.1), class = "b"), # I took a wide sd due to convergence problems
-    # prior(horseshoe(), class = "b"), # WOW!!!
+    # prior(normal(0,2), class = "b"), # I took a wide sd due to convergence problems
+    prior(horseshoe(df = 3, par_ratio = 0.1, df_slab = 6), class = "b"), # WOW!!!
     prior(normal(log(80), 0.2), class = Intercept), # about human life expectancy
     #prior(normal(50, 50), class = Intercept), #, # uninformative
     # prior(normal(10, 4), class = shape) # Hazard: bad, gamma better?
@@ -806,7 +806,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
     prior = priors,
     # warmup = 250, 
     iter = 20000, chains = 2, cores = 2,
-    control = list(adapt_delta = 0.97, max_treedepth = 12, stepsize = 0.1),
+    control = list(adapt_delta = 0.95, max_treedepth = 12, stepsize = 0.1),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
     backend = "cmdstanr",
@@ -1322,7 +1322,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 400, p = 100, g = 5, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+debug_methods(n = 400, p = 2000, g = 20, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 0.2) %>%
   system.time()
 ```
 

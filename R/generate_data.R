@@ -487,6 +487,45 @@ generate_betas = function(p, g, rho, rho_between, seed,
   betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full * beta_scale)
   
   
+  #  *********** SNR-BASED SCALING *************
+  # Estimate noise variance from baseline distribution
+  n_sim = 1e5
+  
+  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0,  # X_rho kept at 0 through code
+                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
+  
+  
+  
+  if (method == "weibull") {
+    # lambda_baseline <- weib_scale^(-weib_shape)
+    # nu_baseline <- weib_shape
+    # baseline_T <- rweibull_custom(n_sim, lambda = lambda_baseline, nu = nu_baseline, linpred = 0)
+    # epsilon_var = var((baseline_T))
+    baseline_T <- stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
+    epsilon_var = var(log(baseline_T))
+  } else if (method == "gompertz") {
+    # TODO: IMPLEMENT GOMPERTZ
+  } else {
+    stop("Method must be 'weibull' or 'gompertz'")
+  }
+  
+  linpred_raw = as.matrix(X_sample$X) %*% betas
+  
+  # Set target SNR and rescale
+  target_var_linpred = target_snr * epsilon_var
+  current_var_linpred = var(linpred_raw)
+  
+  
+  scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
+  betas = betas * scale_factor
+  
+  ## Center to preserve baseline average survival
+  # betas = 
+  #   beta_df$beta[beta_df$group %in% active_groups] -
+  #   mean(beta_df$beta[beta_df$group %in% active_groups])
+  #  ************************************
+  
+  
   # Set inactive groups to exactly zero for Betas
   for (group in setdiff(1:g, active_groups)) {
     idx = ((group-1) * p_g + 1):(group * p_g)
@@ -516,45 +555,9 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # scale_factor = sqrt(target_variance / current_variance)
   # beta_df$beta = beta_df$beta * scale_factor
   
-  #  *********** SNR-BASED SCALING *************
-  # Estimate noise variance from baseline distribution
-  n_sim = 1e5
-  
-  X_sample = generate_X(n = n_sim, p = length(active_groups) *p_g, g = round(non_zero_groups * g), rho = 0,  # X_rho kept at 0 through code
-                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
-  
-   
-  
-  if (method == "weibull") {
-    # lambda_baseline <- weib_scale^(-weib_shape)
-    # nu_baseline <- weib_shape
-    # baseline_T <- rweibull_custom(n_sim, lambda = lambda_baseline, nu = nu_baseline, linpred = 0)
-    # epsilon_var = var((baseline_T))
-    baseline_T <- stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
-    epsilon_var = var(log(baseline_T))
-  } else if (method == "gompertz") {
-    # TODO: IMPLEMENT GOMPERTZ
-  } else {
-    stop("Method must be 'weibull' or 'gompertz'")
-  }
-
-  linpred_raw = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
-  
-  # Set target SNR and rescale
-  target_var_linpred = target_snr * epsilon_var
-  current_var_linpred = var(linpred_raw)
   
   
-  scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
-  beta_df$beta = beta_df$beta * scale_factor
-  
-  # Center to preserve baseline average survival
-  beta_df$beta[beta_df$group %in% active_groups] = 
-    beta_df$beta[beta_df$group %in% active_groups] -
-    mean(beta_df$beta[beta_df$group %in% active_groups])
-  #  ************************************
-  
-  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta[beta_df$group %in% active_groups]
+  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta
   print("VARS:")
   print(var(linpred_final))
   print(target_var_linpred)
