@@ -178,72 +178,7 @@ aft_reg_gompertz = function(df_sim, p) {
   a_est <- tau_est / sigma_est
   b_est <- 1 / sigma_est
   
-  betas_est_aft <- fit_aft$coefficients[1:p]
-  linpred_aft <- rowSums(sweep(df_sim_test[,1:p], 2, betas_est_aft, "*"))
-  
-  distr_ests = list(sigma = sigma_est, tau = tau_est, a = a_est, b = b_est)
-  
-  #### ESTIMATE MRL
-  df_sim_test$pred_mrl = NA
-  
-  for (i in 1:nrow(df_sim_test)) {
-    mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim_test$age_start[i] * exp(linpred_aft[i])), 
-                         upper=Inf, a = a_est, b = b_est)$value
-    s_cond <-  gomp_baseline_surv(df_sim_test$age_start[i] * exp(linpred_aft[i]), a = a_est, b = b_est) 
-    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred_aft[i])
-    
-    if(is.na(df_sim_test$pred_mrl[i]) || df_sim_test$pred_mrl[i] < 0) {
-      df_sim_test$pred_mrl[i] <- NA
-    }
-  }
-  
-  pred_mrl = df_sim_test$pred_mrl
-  # obtain biological age, assuming true lifetable is known
-  aft_b = vector(length = length(pred_mrl))
-  
-  for (i in 1:length(pred_mrl)){
-    aft_b[i] = lt$t[which.min(abs(lt$mrl - pred_mrl[i]))]
-  }
-
-  # Calculate rmses
-  aftreg_coef_rmse = sqrt(mean((betas_est_aft - true_betas$beta)^2))
-  aftreg_rmse = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
-  aftreg_bioage_rmse = sqrt(mean((aft_b - df_sim_test$b_age)^2))
-
-  # plt = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
-  #   geom_point() +
-  #   geom_abline(color = 'red') +
-  #   labs(title = "True vs Predicted MRL for EHA AFT Gompertz",
-  #        subtitle = glue("RMSE = {aftreg_rmse}")) +
-  #   theme_minimal()
-  # print(plt)
-
-  true_betas$betahat = betas_est_aft
-
-  # plt = true_betas %>%
-  #   mutate(index = 1:p) %>%
-  #   ggplot(aes(x = index)) +
-  #   geom_segment(aes(xend = index, y = beta, yend = betahat), color = "gray") +
-  #   geom_point(aes(y = beta, color = "True")) +
-  #   geom_point(aes(y = betahat, color = "Predicted")) +
-  #   scale_color_manual(values = c("True" = "black", "Predicted" = "skyblue"),
-  #                      name = "Type") +
-  #   ylab("β") +
-  #   xlab("Index") +
-  #   labs(title = "True vs Predicted β-coefficients for AFT Gompertz", 
-  #        subtitle = glue("RMSE = {aftreg_coef_rmse %>% round(4)}")) +
-  #   theme_minimal()
-  # print(plt)
-  
-  return(list(
-    test_data = df_sim_test,
-    true_betas = true_betas,
-    predicted_betas = betas_est_aft,
-    predicted_bioage = aft_b,
-    rmses = list(coef = aftreg_coef_rmse, mrl = aftreg_rmse, bioage = aftreg_bioage_rmse),
-    method = "AFT gompertz",
-    distr_ests = distr_ests
-  ))
+  # TODO: Apply methods from Weibull to Gompertz
 }
 ```
 
@@ -282,7 +217,7 @@ aft_reg_weibull = function(df_sim, p) {
     message("AFT model error: ", e$message)
     NULL
   })
-  fa <<- fit_aft
+  DEBUG_fa <<- fit_aft
   if (is.null(fit_aft)) {
     print("Fit failed")
     return(NULL)
@@ -601,10 +536,11 @@ psbc_reg = function(df_sim, p, g) {
 ## BRMS Bayesian AFT
 
 ```{r}
-brms_reg = function(df_sim, p, g, method, seed = 123) {
+brms_reg = function(df_sim, p, g, method, seed = 123, prior = "horseshoe") {
+  stopifnot(prior %in% c("horseshoe", "cauchy", "normal"))
   result = switch(method,
-    "gompertz" = brms_reg_gompertz(df_sim, p, g, seed),
-    "weibull" = brms_reg_weibull(df_sim, p, g, seed),
+    "gompertz" = brms_reg_gompertz(df_sim, p, g, seed, prior = prior),
+    "weibull" = brms_reg_weibull(df_sim, p, g, seed, prior = prior),
     stop("Unsupported method: ", method)
   )
   return(result)
@@ -615,7 +551,8 @@ brms_reg = function(df_sim, p, g, method, seed = 123) {
 ### Gompertz implementation
 
 ```{r}
-brms_reg_gompertz = function(df_sim, p, g, seed) {
+brms_reg_gompertz = function(df_sim, p, g, seed, prior) {
+  # ----
   # Grompertz stan implementation source:
   # https://metrumrg.com/wp-content/uploads/2024/12/2024-Yoder-cure-rate-brms.pdf
   # Todd Yoder, Andrew Tredennick, Timothy Waterhouse: Gompertz Cure Rate Survival Models with Stan and brms
@@ -660,6 +597,7 @@ brms_reg_gompertz = function(df_sim, p, g, seed) {
       return(gompertz_rng(mu, gamma))
     }
   )
+  # ----
   
   true_betas = df_sim$true_betas
   lt = df_sim$lt
@@ -689,92 +627,14 @@ brms_reg_gompertz = function(df_sim, p, g, seed) {
     warmup = 2000, iter = 4000, chains = 4, cores = 4
   )
   
-  # Extract posterior samples and calculate estimates
-  post = posterior_samples(fit_bayes_aft)
-  beta_cols = paste0("b_x", 1:p)
-  betahat = apply(post[, beta_cols], 2, mean)
-  
-  X_test = df_sim_test[,1:p] %>% as.matrix
-  linpred = X_test %*% betahat
-  
-  # Extract Gompertz parameters from posterior
-  mu_est = mean(post$mu)
-  gamma_est = mean(post$gamma)
-  
-  # Convert to a/b parameterization for consistency with AFT
-  a_est = gamma_est
-  b_est = 1/mu_est
-  
-  #### ESTIMATE MRL (using median approach like AFT)
-  df_sim_test$pred_mrl = NA
-  
-  for (i in 1:nrow(df_sim_test)) {
-    mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim_test$age_start[i] * exp(linpred[i])), 
-                         upper=Inf, a = a_est, b = b_est)$value
-    s_cond <-  gomp_baseline_surv(df_sim_test$age_start[i] * exp(linpred[i]), a = a_est, b = b_est) 
-    df_sim_test$pred_mrl[i] <- (mrl_uncon / s_cond) * exp(-linpred[i])
-    
-    if(is.na(df_sim_test$pred_mrl[i]) || df_sim_test$pred_mrl[i] < 0) {
-      df_sim_test$pred_mrl[i] <- NA
-    }
-  }
-  
-  # obtain biological age, assuming true lifetable is known
-  pred_mrl = df_sim_test$pred_mrl
-  brms_b = vector(length = length(pred_mrl))
-  
-  for (i in 1:length(pred_mrl)){
-    brms_b[i] = lt$t[which.min(abs(lt$mrl - pred_mrl[i]))]
-  }
-  
-  # Calculate rmses
-  pred_RMSE = sqrt(mean((df_sim_test$mrl - df_sim_test$pred_mrl)^2))
-  beta_RMSE = sqrt(mean((betahat - true_betas$beta)^2))
-  bioage_RMSE = sqrt(mean((brms_b - df_sim_test$b_age)^2))
-
-  # MRL prediction plot
-  plt = df_sim_test %>% ggplot(aes(x = mrl, y = pred_mrl)) +
-    geom_point() +
-    geom_abline(color = 'red') +
-    labs(title = "True vs Predicted MRL for BRMS AFT Gompertz",
-         subtitle = glue("RMSE = {pred_RMSE}")) +
-    theme_minimal()
-  # print(plt)
-
-  # Beta comparison plot
-  true_betas$betahat = betahat
-
-  plt = true_betas %>%
-    mutate(index = 1:p) %>%
-    ggplot(aes(x = index)) +
-    geom_segment(aes(xend = index, y = beta, yend = betahat), color = "gray") +
-    geom_point(aes(y = beta, color = "True")) +
-    geom_point(aes(y = betahat, color = "Predicted")) +
-    scale_color_manual(values = c("True" = "black", "Predicted" = "skyblue"),
-                       name = "Type") +
-    ylab("β") +
-    xlab("Index") +
-    labs(title = "True vs Predicted β-coefficients for BRMS AFT Gompertz", 
-         subtitle = glue("RMSE = {beta_RMSE %>% round(4)}")) +
-    theme_minimal()
-  # print(plt)
-  
-  return(list(
-    test_data = df_sim_test,
-    true_betas = true_betas,
-    predicted_betas = betahat,
-    predicted_bioage = brms_b,
-    rmses = list(coef = beta_RMSE, mrl = pred_RMSE, bioage = bioage_RMSE),
-    method = "BRMS gompertz",
-    distr_ests = list(mu = mu_est, gamma = gamma_est, a = a_est, b = b_est)
-  ))
+  # TODO: Apply methods from Weibull to Gompertz
 }
 ```
 
 ### Weibull implementation
 
 ```{r}
-brms_reg_weibull = function(df_sim, p, g, seed = 123) {
+brms_reg_weibull = function(df_sim, p, g, seed = 123, prior) {
   true_betas = df_sim$true_betas
   lt = df_sim$lt
   df_sim = df_sim$df
@@ -787,33 +647,45 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   #### FIT MODEL
   preds = paste(paste0("x", 1:p), collapse = " + ")
   formula = as.formula(paste("age_end | cens(1 - status) + trunc(lb = age_start) ~", preds))
+  DEBUG_available_priors <<- get_prior(formula, df_sim_train)
 
+  c_scale = (1/p)/log(p)
+  #c_scale = 0.001
   priors = c(
-    # prior(normal(0,2), class = "b"), # I took a wide sd due to convergence problems
-    prior(horseshoe(df = 3, par_ratio = 0.1, df_slab = 6), class = "b"), # WOW!!!
-    prior(normal(log(80), 0.2), class = Intercept), # about human life expectancy
-    #prior(normal(50, 50), class = Intercept), #, # uninformative
-    # prior(normal(10, 4), class = shape) # Hazard: bad, gamma better?
-    prior(gamma(50, 5), class = shape) # not log scale!! (mean of gamma is a/b)
-    # prior(normal(50, 50), class = shape) # uninformative
+    prior(normal(log(80), 1), class = Intercept), # about human life expectancy
+    prior(gamma(1,1), class = shape) # not log scale!! (mean of gamma is a/b)
   )
+  
+  stanvars = stanvar(c_scale, name = "c_scale")
+  vp = switch(prior,
+               "horseshoe" = prior(horseshoe(df = 4, par_ratio = 0.2), class = "b"),
+               "cauchy" = prior(cauchy(0,c_scale), class = "b"),
+               "normal" = prior(normal(0,0.5), class = "b"),
+               stop("How did this get through?", prior)
+             )
+  
+  priors = c(vp, priors)
+  priors = as.brmsprior(priors)
+  print(priors)
 
-
+  print("Fitting Bayesian Regression Model...")
   fit_bayes_aft = brm(
     formula = formula,
     data = df_sim_train,
     family = weibull(),
     prior = priors,
-    # warmup = 250, 
-    iter = 20000, chains = 2, cores = 2,
-    control = list(adapt_delta = 0.95, max_treedepth = 12, stepsize = 0.1),
+    iter = 10000, chains = 2, cores = 2,
+    control = list(adapt_delta = 0.97, max_treedepth = 15, stepsize = 0.01),
+    #control = list(adapt_delta = 0.97, max_treedepth = 13, stepsize = 0.1),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
     backend = "cmdstanr",
     threads = threading(2),
-    save_pars = save_pars(all = TRUE), init = 0
+    save_pars = save_pars(all = TRUE), init = 0,
+    stanvars = stanvars
 
   )
+  print("Done!")
   # "Whenever you see the warning
   # 'There were x divergent transitions after warmup.', you should really think about
   # increasing adapt_delta. To do this, write control = list(adapt_delta = <x>), where
@@ -822,7 +694,7 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123) {
   # the validity of your posterior samples." —
   # https://cran.r-project.org/web/packages/brms/vignettes/brms_overview.pdf
   
-  fb <<- fit_bayes_aft
+  DEBUG_fb <<- fit_bayes_aft
   
   
   # Extract posterior samples and calculate estimates
@@ -1140,14 +1012,14 @@ Small tests:
 ## Debug function:
 
 ```{r}
-debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123, t_SNR = 2, perf_A = T, nzg = 1) {
+debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123, t_SNR = 2, perf_A = T, nzg = 1, prior = "horseshoe") {
   
   cat("**** SETTINGS ****\n")
   cat("n =", n, "p =", p, "g =", g, "method =", method, "\n\n")
   
   cat("Generating data...\n")
   if (method == "weibull") {
-    a = 10 # shape
+    a = 15 # shape
     b = 80 # scale
   } else {
     a = exp(-9) # gompertz a
@@ -1162,9 +1034,9 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
     ltname = glue("debug_{method}"),
     seed = seed,
     force_recalc = TRUE,
-    X_plots = FALSE,
-    X_rho = 0,
-    β_rho = 0.9,
+    X_plots = T,
+    X_rho = 0.4,
+    β_rho = 0.4,
     non_zero_betas = nzg,
     X_scale = 1,
     active_hazard = 0,
@@ -1187,26 +1059,27 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
   cat("**** TESTING AFT ****\n")
   set.seed(seed)
   aft_result = aft_reg(df_sim = gres, p = p, method = method)
+   
+  #aft_result = NULL # DEBUG
   
   if (!is.null(aft_result)) {
     cat("AFT SUCCESS!\n")
     cat("AFT RMSEs:", "\n")
     print(aft_result$rmses)
-    plot(fa)
+    plot(DEBUG_fa)
   } else {
     cat("AFT FAILED!\n")
   }
-  # aft_result = NULL # DEBUG
   
   cat("\n**** TESTING BRMS ****\n")
   set.seed(seed)
-  brms_result = brms_reg(df_sim = gres, p = p, g = g, method = method, seed = seed)
+  brms_result = brms_reg(df_sim = gres, p = p, g = g, method = method, seed = seed,  prior = prior)
   
   if (!is.null(brms_result)) {
     cat("BRMS SUCCESS!\n") 
     cat("BRMS RMSEs:", "\n")
     print(brms_result$rmses)
-    plot(fb, variable = c("b_Intercept", "shape", "b_x1"))
+    plot(DEBUG_fb, variable = c("b_Intercept", "shape", "b_x1"))
   } else {
     cat("BRMS FAILED!\n")
   }
@@ -1317,69 +1190,64 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 
 ## Method: Weibull; p = 20; $n \in \{125, 250, 500, 2000\}$; $r_{nz} \in \{ 1\}$ 
 
-### n = 125
+### cauchy 1/p
 
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 400, p = 2000, g = 20, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 0.2) %>%
-  system.time()
-```
-
-
-### n = 250
-```{r}
-debug_methods(n = 250, p = 4, g = 4, method = "weibull", seed = 40, t_SNR = 0, perf_A = T, nzg = 0.1) %>%
-  system.time()
-```
-
-### n = 500
-
-```{r}
-debug_methods(n = 500, p = 20, g = 10, method = "weibull", seed = 40, t_SNR = 0.5, perf_A = T, nzg = 0.5) %>%
-  system.time()
-```
-
-### n = 1000
-
-```{r}
-debug_methods(n = 1000, p = 20, g = 10, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.5) %>%
-  system.time()
-```
-
-
-## Method: Weibull; p = 100; $n \in \{250, 500\}$; $r_{nz} \in \{1\}$ 
-
-### n = 250
-
-```{r}
-debug_methods(n = 250, p = 100, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 1) %>%
-  system.time()
-```
-
-### n = 500
-
-```{r}
-debug_methods(n = 1000, p = 60, g = 5, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.4) %>%
+debug_methods(n = 200, p = 200, g = 4, method = "weibull", seed = 42, t_SNR = 10, perf_A = T, nzg = 1, prior = "cauchy") %>%
   system.time()
 ```
 
 
 ```{r}
+source("R/generate_data.R")
 
+debug_methods(n = 500, p = 200, g = 10, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+  system.time()
 ```
 
-
-
-## High-dim
+### Cauchy 0.01
 
 ```{r}
-debug_methods(n = 500, p = 1000, g = 100, method = "weibull", seed = 40, t_SNR = 8, perf_A = T, nzg = 0.1) %>%
+source("R/generate_data.R")
+
+debug_methods(n = 500, p = 20, g = 5, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
   system.time()
 ```
 
 
+```{r}
+source("R/generate_data.R")
+
+debug_methods(n = 500, p = 200, g = 10, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+  system.time()
+```
+
+## Horseshoe
+
+```{r}
+source("R/generate_data.R")
+
+debug_methods(n = 500, p = 20, g = 5, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+  system.time()
+```
 
 
+```{r}
+source("R/generate_data.R")
 
+debug_methods(n = 500, p = 200, g = 10, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+  system.time()
 
+```
+
+## TESTS
+
+```{r}
+source("R/generate_data.R")
+
+debug_methods(n = 100, p = 10, g = 2, method = "weibull", seed = 42, t_SNR = 1, perf_A = T, nzg = 1) %>%
+  system.time()
+
+```

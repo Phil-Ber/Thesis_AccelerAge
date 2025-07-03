@@ -77,7 +77,7 @@ generate_population_lifetable_gompertz = function(
       y = "Mean Residual Life"
     ) +
     theme_minimal()
-  true_lt <<- lt
+  DEBUG_true_lt <<- lt
   return(lt)
 }
 
@@ -170,7 +170,7 @@ create_dataset_gompretz = function(
   df_sim$follow_up_time <- df_sim$yrs_rem
   df_sim$follow_up_time[wh] <- followup
   df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
-  true_df_sim <<- df_sim
+  DEBUG_true_df_sim <<- df_sim
   return(df_sim)
   
 }
@@ -270,7 +270,7 @@ generate_population_lifetable_weibull = function(
          x = "Time (t)", y = "Mean Residual Life") +
     theme_minimal()
   
-  true_lt <<- lt
+  DEBUG_true_lt <<- lt
   return(lt)
 }
 
@@ -387,7 +387,7 @@ create_dataset_weibull = function(
   df_sim$follow_up_time <- df_sim$yrs_rem
   df_sim$follow_up_time[wh] <- followup
   df_sim$age_end <- df_sim$age_start + df_sim$follow_up_time
-  true_df_sim <<- df_sim
+  DEBUG_true_df_sim <<- df_sim
   return(df_sim)
   
 }
@@ -445,7 +445,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   
   p_g = p/g
   group_membership = rep(1:g, each = p_g)
-  # Sample Beta means from uniform distribution
+  # Sample Beta means from uniform distribution (mean of each group)
   mus = runif(g, mu_l, mu_u)
   betas = numeric(p)
   
@@ -465,7 +465,9 @@ generate_betas = function(p, g, rho, rho_between, seed,
       block_distance = abs(i - j)
       if (block_distance == 0) {
         # On diagonal - within group correlation
-        sigma_full[i_idx, j_idx] = toeplitz(pmax(rho^(0:(p_g-1)), rep(rho_between, p_g)))
+        # rho^((0:(p_g-1))/(p_g-1)), this means that the toeplitz value goes
+        # from 1 to rho, no matter the size of p or g
+        sigma_full[i_idx, j_idx] = toeplitz(pmax(rho^((0:(p_g-1))/(p_g-1)), rep(rho_between, p_g)))
       } else {
         # Correlation decreases with group distance 
         sigma_full[i_idx, j_idx] = rho_between#^block_distance
@@ -486,28 +488,33 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # Generate all betas using block matrix
   betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full * beta_scale)
   
+  # Set inactive groups to exactly zero for Betas
+  for (group in setdiff(1:g, active_groups)) {
+    idx = ((group-1) * p_g + 1):(group * p_g)
+    betas[idx] = 0
+  }
+  
+  print(glue("Mean of betas pre-scaling: {mean(betas)}"))
+  print(glue("{c('Lower', 'Upper')} range of beta values pre-scaling: {range(betas)}"))
+  
   
   #  *********** SNR-BASED SCALING *************
   # Estimate noise variance from baseline distribution
   n_sim = 1e5
   
-  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0,  # X_rho kept at 0 through code
-                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
-  
+  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0.4,  # X_rho kept at 0 through code
+                        rho_between = 0.4, seed = seed, scale = 1, X_plots = F)
   
   
   if (method == "weibull") {
-    # lambda_baseline <- weib_scale^(-weib_shape)
-    # nu_baseline <- weib_shape
-    # baseline_T <- rweibull_custom(n_sim, lambda = lambda_baseline, nu = nu_baseline, linpred = 0)
-    # epsilon_var = var((baseline_T))
-    baseline_T <- stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
+    baseline_T = stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
     epsilon_var = var(log(baseline_T))
   } else if (method == "gompertz") {
     # TODO: IMPLEMENT GOMPERTZ
   } else {
     stop("Method must be 'weibull' or 'gompertz'")
   }
+  
   
   linpred_raw = as.matrix(X_sample$X) %*% betas
   
@@ -517,6 +524,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   
   
   scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
+  print(glue("Scale Factor: {scale_factor}"))
   betas = betas * scale_factor
   
   ## Center to preserve baseline average survival
@@ -524,17 +532,21 @@ generate_betas = function(p, g, rho, rho_between, seed,
   #   beta_df$beta[beta_df$group %in% active_groups] -
   #   mean(beta_df$beta[beta_df$group %in% active_groups])
   #  ************************************
+  linpred_final = as.matrix(X_sample$X) %*% betas
+  print("VARS:")
+  print(var(linpred_final))
+  print(target_var_linpred)
+  achieved_snr = var(linpred_final) / target_var_linpred
   
   
-  # Set inactive groups to exactly zero for Betas
-  for (group in setdiff(1:g, active_groups)) {
-    idx = ((group-1) * p_g + 1):(group * p_g)
-    betas[idx] = 0
-  }
+  print(glue("Target SNR: {target_snr}"))
+  print(glue("Epsilon variance: {round(epsilon_var, 4)}"))
+  print(glue("Achieved SNR: {round(achieved_snr, 2)}"))
+  
+  
   
   beta_df = tibble(beta = betas, group = group_membership)
-  print(glue("Mean of betas pre-scaling: {mean(beta_df$beta)}"))
-  print(glue("{c('Lower', 'Upper')} range of beta values pre-scaling: {range(beta_df$beta)}"))
+
   # Scale active betas to make E(betas) = active_hazard
   beta_df = beta_df %>%
     mutate(beta = if_else(group %in% active_groups,
@@ -557,20 +569,11 @@ generate_betas = function(p, g, rho, rho_between, seed,
   
   
   
-  linpred_final = as.matrix(X_sample$X) %*% beta_df$beta
-  print("VARS:")
-  print(var(linpred_final))
-  print(target_var_linpred)
-  achieved_snr = var(linpred_final) / target_var_linpred
+
+
   
-  
-  
-  print(glue("Method: {method}"))
-  print(glue("Target SNR: {target_snr}"))
-  print(glue("Epsilon variance: {round(epsilon_var, 4)}"))
   print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
   print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
-  print(glue("Achieved SNR: {round(achieved_snr, 2)}"))
   
   
   if (plot) {
@@ -589,7 +592,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
     # Add a horizontal line at y=0 for reference
     abline(h = 0, lty = 2, col = "gray50")
   }
-  true_beta_df <<- beta_df # Save to global var
+  DEBUG_true_beta_df <<- beta_df # Save to global var
   return(beta_df)
 }
 
@@ -617,7 +620,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
       block_distance = abs(i - j) # GROUP VALUE
       if (block_distance == 0) { # On diagonal
         # Within group correlation, pmax takes the highest value so within goup can not be lower than between
-        sigma_var[i_idx, j_idx] = toeplitz(pmax(rho^(0:(p_g-1)), rep(rho_between, p_g)))
+        sigma_var[i_idx, j_idx] = toeplitz(pmax(rho^((0:(p_g-1))/(p_g-1)), rep(rho_between, p_g)))
         # sigma_var[i_idx, j_idx] = toeplitz(rho^(0:(p_g-1)))
       } else { # Off Diagonal
         # Correlation decreases with group distance 
@@ -626,6 +629,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
     }
   }
   
+  DEBUG_svarr <<- sigma_var
   
   # Generate all covariates using block matrix
   # X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
@@ -667,7 +671,7 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   }
   
   colnames(X_df) = paste0("X", 1:p)
-  true_X_df <<- X_df
+  DEBUG_true_X_df <<- X_df
   return(list(
     X = X_df,
     group_membership = group_membership
