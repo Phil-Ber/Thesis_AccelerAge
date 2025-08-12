@@ -502,8 +502,8 @@ generate_betas = function(p, g, rho, rho_between, seed,
   # Estimate noise variance from baseline distribution
   n_sim = 1e5
   
-  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0.4,  # X_rho kept at 0 through code
-                        rho_between = 0.4, seed = seed, scale = 1, X_plots = F)
+  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0.4,  # X_rho kept at 0.4 through code
+                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
   
   
   if (method == "weibull") {

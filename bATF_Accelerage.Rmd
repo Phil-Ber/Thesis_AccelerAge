@@ -649,16 +649,15 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123, prior) {
   formula = as.formula(paste("age_end | cens(1 - status) + trunc(lb = age_start) ~", preds))
   DEBUG_available_priors <<- get_prior(formula, df_sim_train)
 
-  c_scale = (1/p)/log(p)
-  #c_scale = 0.001
+  c_scale = max((1/p)/sqrt(p), 0.001)
   priors = c(
     prior(normal(log(80), 1), class = Intercept), # about human life expectancy
-    prior(gamma(1,1), class = shape) # not log scale!! (mean of gamma is a/b)
+    prior(gamma(15,1), class = shape) # not log scale!! (mean of gamma is a/b)
   )
   
   stanvars = stanvar(c_scale, name = "c_scale")
   vp = switch(prior,
-               "horseshoe" = prior(horseshoe(df = 4, par_ratio = 0.2), class = "b"),
+               "horseshoe" = prior(horseshoe(), class = "b"),
                "cauchy" = prior(cauchy(0,c_scale), class = "b"),
                "normal" = prior(normal(0,0.5), class = "b"),
                stop("How did this get through?", prior)
@@ -668,20 +667,22 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123, prior) {
   priors = as.brmsprior(priors)
   print(priors)
 
+  
+  # Send to mar
+  # We considered three data-generating mechanisms: one in which the baseline hazard ℎ0⁡(𝑡) follows a Gompertz distribution and the PH assumption holds (referred to as Gompertz-PH), one in which ℎ0⁡(𝑡) follows a Gompertz distribution and the AFT assumption holds (referred to as Gompertz-AFT) and one in which ℎ0⁡(𝑡) follows a Weibull distribution (referred to as Weibull), which per definition can be parameterized as both an AFT and a PH model at the same time. We included the Gompertz scenarios because the Gompertz distribution is known to accurately describe (human) lifespan. We included the Weibull scenario to illustrate the effect of a misspecified baseline when fitting a parametric AFT model.
   print("Fitting Bayesian Regression Model...")
   fit_bayes_aft = brm(
     formula = formula,
     data = df_sim_train,
     family = weibull(),
     prior = priors,
-    iter = 10000, chains = 2, cores = 2,
-    control = list(adapt_delta = 0.97, max_treedepth = 15, stepsize = 0.01),
-    #control = list(adapt_delta = 0.97, max_treedepth = 13, stepsize = 0.1),
+    iter = 3000, chains = 5,
+    control = list(adapt_delta = 0.99, max_treedepth = 12),
     seed = seed,
     # install.packages("cmdstanr", repos = c('https://stan-dev.r-universe.dev', getOption("repos")))
     backend = "cmdstanr",
     threads = threading(2),
-    save_pars = save_pars(all = TRUE), init = 0,
+    save_pars = save_pars(all = TRUE), init = ifelse(prior == "cauchy", 0, rnorm(p, 0, 0.1)),
     stanvars = stanvars
 
   )
@@ -707,9 +708,9 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123, prior) {
   # linpred = X_test %*% betahat
   linpred = rowSums(sweep(df_sim_test[,1:p], 2, betahat, "*"))
   
-  shape_est = (mean(post$shape)) # Not exp because not in log scale????
+  shape_est = (mean(post$shape))
   cat("Shape estimate:", shape_est, "\n")
-  scale_est = exp(mean(post$b_Intercept))
+  scale_est = exp(mean(post$b_Intercept)) # exp because we defined a log mean prior
   cat("Scale estimate", (scale_est), "\n")
   
   
@@ -830,40 +831,55 @@ brms_reg_weibull = function(df_sim, p, g, seed = 123, prior) {
 ```
 
 
-## Monte Carlo Experiments
+# Monte Carlo Experiments
 
 ```{r}
 run_grid_experiments_mc = function(
-  n_grid = c(200, 500, 1000),
+  n_grid = c(100, 250, 500),
   p_grid = c(20, 60, 100),
-  g_grid = c(4, 6, 10),
-  non_zero_grid = c(0.5, 0.75, 1.0),
-  M = 10,
-  pop_n = 100000,
+  g_grid = c(4, 10),
+  beta_prior = c("horseshoe", "cauchy"),
+  non_zero_grid = c(0.25, 1.0),
+  M = 100,
+  pop_n = 100000, # Lifetable population n
   bsep = 4,
-  X_rho = 0,
-  target_snr = 4,
+  X_rho = 0.4,
+  B_ro = 0.4,
+  target_snr = 2,
   method = "weibull",
-  seed_base = 123
+  seed_base = 123,
+  experiment_name = NA
 ) {
-  # Filename for experiment running
+  print("Running MC experiment...")
+  # Filename for experiment running unless specified otherwise
   datetime_start = gsub(" ", "_",date())
+  
+  # Change to desired experiment name
+  exp_name = ifelse(is.na(experiment_name), datetime_start, experiment_name)
   
   # Create parameter grid
   param_grid = expand.grid(
     n_obs = n_grid,
     p = p_grid,
     g = g_grid,
-    non_zero = non_zero_grid
+    non_zero = non_zero_grid,
+    beta_prior = beta_prior
   )
+  
+  # Save to CSV
+  write.csv(param_grid, file = glue("Grid:_{exp_name}.csv"))
   
   # Filter invalid combinations, p should be divisible by g (not irrational)
   param_grid = param_grid[param_grid$p %% param_grid$g == 0, ]
   
+  # Set non-zero to 1 when there is but one group, otherwise all betas will be zero
+  # param_grid[param_grid$g == 1,]$non_zero = 1
+  
+  
   cat(glue("Running {nrow(param_grid)} parameter combinations with {M} replications each\n"))
   cat(glue("Total experiments: {nrow(param_grid) * M}\n\n"))
   
-  all_results = list()
+  # all_results = list()
   
   if (method == "gompertz") {
     a = exp(-9)
@@ -874,20 +890,26 @@ run_grid_experiments_mc = function(
   }
   
   # Iterate through the grid
-  for (i in 1:nrow(param_grid)) {
+  for (i in 1:nrow(param_grid)) { # 5 due to stuff
     # Params to compare
     params = param_grid[i,]
     
-    cat(glue("\n<<<<<<<< Parameter Set {i}/{nrow(param_grid)} >>>>>>>>>>"), "\n")
-    cat(glue("n = {params$n_obs} | p = {params$p} | g = {params$g} | non-zero = {params$non_zero}"), "\n")
+    print(glue("\n<<<<<<<< Parameter Set {i}/{nrow(param_grid)} >>>>>>>>>>"), "\n")
+    cat(glue("n = {params$n_obs} | p = {params$p} | g = {params$g} | non-zero = {params$non_zero} | beta-prior = {params$beta_prior}"), "\n")
     
     # Run M Monte Carlo replications
     mc_results = list()
     
     for (m in 1:M) {
-      seed = seed_base + m
+      # Clear the console otherwise Rstudio client freezes
+      if (m %% 10 == 0) {
+        cat(m, '\n')
+        flush.console()
+      }
+      print(glue("<<< Running grid item {i}/{nrow(param_grid)}, repetition {m}/{M} >>>"))
       
-      cat(glue("  Rep {m}/{M}... "), "\n")
+      # Seed for reproducibility
+      seed = seed_base + i + m
       
       # Generate data
       gres = generate_data(
@@ -900,7 +922,7 @@ run_grid_experiments_mc = function(
         force_recalc = FALSE, # IMPORTANT! SAME LT!
         X_plots = FALSE, 
         X_rho = X_rho, 
-        β_rho = 0.9, 
+        β_rho = B_ro, 
         non_zero_betas = params$non_zero, 
         X_scale = 1,
         active_hazard = 0, 
@@ -917,11 +939,14 @@ run_grid_experiments_mc = function(
       
       # AFT
       print("Running Frequentist AFT...")
+      FA_start = Sys.time()
       set.seed(seed)
       results$aft = tryCatch(
         aft_reg(df_sim = gres, p = params$p, method = method),
         error = function(e) NULL
       )
+      FA_stop = Sys.time()
+      FA_time = difftime(FA_stop, FA_start, units = "secs")
       
       # # PSBC
       # print("Running PSBC Bayesian AFT...")
@@ -933,35 +958,44 @@ run_grid_experiments_mc = function(
       
       # BRMS
       print("Running BRMS Bayesian AFT...")
+      B_start = Sys.time()
       set.seed(seed)
       results$brms = tryCatch(
-        brms_reg(df_sim = gres, p = params$p, g = params$g, method = method),
+        brms_reg(df_sim = gres, p = params$p, g = params$g, method = method, prior = params$beta_prior),
         error = function(e) NULL
       )
+      B_stop = Sys.time()
+      B_time = difftime(B_stop, B_start, units = "secs")
       
       mc_results[[m]] = list(
         params = params,
         seed = seed,
-        results = results
+        results = results,
+        timing = list(frequentist_seconds = as.numeric(FA_time),
+                      bayesian_seconds = as.numeric(B_time))
       )
       
       cat("Done\n")
     }
-    all_results[[i]] = list(
+    results = list(
       params = params,
       mc_results = mc_results
     )
-    write_rds(all_results, file = glue("Experiment:_{datetime_start}.rds"))
+    write_rds(results, file = glue("Experiment:_{exp_name}_giter_{i}.rds"))
   }
   
   return(all_results)
 }
 ```
 
-# Experiments Monte Carlo
+## Experiments
 
 ```{r}
-options(mc.cores = 4)
+options(mc.cores = 5)
+
+options(device = function(...) pdf(NULL))
+run_grid_experiments_mc(experiment_name = "ResultRun")
+options(device = getOption("device"))
 ```
 
 
@@ -980,9 +1014,9 @@ options(mc.cores = 4)
 # High dimensional example (p = n)
 
 Since obs_n = 200, train test split of 50/50 means that it is trained on 100 observations.
-
+            
 ```{r results='asis'}
-# rmses = run_experiment(p = 10, g = 4, ltname = "p60_may20", seed = 43, nzb = 0.75, bsep = 4, X_rho = 0, obs_n = 200)
+
 # print(rmses)
 ```
 
@@ -1027,7 +1061,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
   }
   
   gres = generate_data(
-    pop_n = as.integer(1e4), # 10,000
+    pop_n = as.integer(1e4), # 10,000 pop in lifetable
     obs_n = n * 2, # x2 due to train test split
     p = p,
     g = g,
@@ -1040,7 +1074,7 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
     non_zero_betas = nzg,
     X_scale = 1,
     active_hazard = 0,
-    betasep = 4,
+    betasep = 10,
     bscale = 1,
     betaplot = TRUE,
     target_snr = t_SNR,
@@ -1057,10 +1091,10 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
   }
   
   cat("**** TESTING AFT ****\n")
-  set.seed(seed)
-  aft_result = aft_reg(df_sim = gres, p = p, method = method)
+  # set.seed(seed)
+  # aft_result = aft_reg(df_sim = gres, p = p, method = method)
    
-  #aft_result = NULL # DEBUG
+  aft_result = NULL # DEBUG
   
   if (!is.null(aft_result)) {
     cat("AFT SUCCESS!\n")
@@ -1194,8 +1228,9 @@ debug_methods = function(n = 100, p = 10, g = 5, method = "weibull", seed = 123,
 
 ```{r}
 source("R/generate_data.R")
+options(mc.cores = 5)
 
-debug_methods(n = 200, p = 200, g = 4, method = "weibull", seed = 42, t_SNR = 10, perf_A = T, nzg = 1, prior = "cauchy") %>%
+debug_methods(n = 400, p = 400, g = 10, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 0.3, prior = "cauchy") %>%
   system.time()
 ```
 
@@ -1229,7 +1264,7 @@ debug_methods(n = 500, p = 200, g = 10, method = "weibull", seed = 42, t_SNR = 2
 ```{r}
 source("R/generate_data.R")
 
-debug_methods(n = 500, p = 20, g = 5, method = "weibull", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
+debug_methods(n = 500, p = 20, g = 5, method = "horseshoe", seed = 42, t_SNR = 2, perf_A = T, nzg = 1) %>%
   system.time()
 ```
 
