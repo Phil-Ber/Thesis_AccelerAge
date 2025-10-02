@@ -1,0 +1,1364 @@
+---
+title: "Results"
+author: "Philippe Berends, 3972003"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+This script contains the code needed to reproduce the plots and tables in my
+thesis. In order to run this code, you require the .rds files generated from
+the MC experiments.
+:
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  fig.path = "plots/",
+  dev = "png",
+  dpi = 300,
+  fig.width = 6,
+  fig.height = 4,
+  fig.retina = 2
+)
+```
+
+My experiment was called "ResultRun", so I will use this name to gather files.
+If you were to reproduce these results, you should change the string in this
+block to the one used in generating the results
+
+```{r}
+exp_name = "FinalRun"
+```
+
+
+# Load libraries
+
+```{r}
+library(tidyverse)
+library(survival)
+library(glue)
+library(xtable)
+library(ggpattern)
+library(patchwork)
+library(survminer)
+```
+
+# Thesis generic
+
+## $\rho$ values
+
+```{r}
+frho = function(rho, rho_between = 0, p_g){
+  # Function used to Rho correlations
+  return(pmax(rho^((0:(p_g-1))/(p_g-1)), rep(rho_between, p_g)))
+}
+
+# Various examples
+small = frho(rho = 0.2, 0, 100)
+medium = frho(rho = 0.5, 0, 100)
+large = frho(rho = 0.8, 0, 100)
+xl = frho(rho = 0.9, 0, 100)
+
+large_b = frho(rho = 0.4, 0.6, 100)
+
+plotframe = data.frame(small,medium,large,xl, large_b)
+
+
+
+
+# Create long format for ggplot
+plotframe = stack(plotframe)
+
+plotframe$ind = factor(plotframe$ind, 
+                      levels = c("small", "medium", "large", "xl", "large_b"),
+                      labels = c("ρw = 0.2, ρb = 0", 
+                                 "ρw = 0.5, ρb = 0",
+                                 "ρw = 0.8, ρb = 0", 
+                                 "ρw = 0.9, ρb = 0",
+                                 "ρw = 0.4, ρb = 0.6"))
+
+
+# Index column
+plotframe["index"] = rep(1:100, 5)
+
+colors = RColorBrewer::brewer.pal(5, "Set1")
+
+plotframe %>%
+  ggplot(aes(y = values, group = ind, x = index, colour = ind)) +
+  geom_line() +
+  labs(title = "Value of f(ρw, ρb) for a group of p/g = 100",
+     x = "Index", 
+     y = "ρ",
+     color = "ρ-values") +
+  scale_color_brewer(palette = "Set1") + 
+  theme_classic() +
+  # Intercepts for the rho values
+  geom_hline(yintercept = 0.2, linewidth = 0.4, color = colors[1], linetype = "dashed") +
+  geom_hline(yintercept = 0.5, linewidth = 0.4, color = colors[2], linetype = "dashed") +
+  geom_hline(yintercept = 0.8, linewidth = 0.4, color = colors[3], linetype = "dashed") +
+  geom_hline(yintercept = 0.9, linewidth = 0.4, color = colors[4], linetype = "dashed") +
+  geom_hline(yintercept = 0.4, linewidth = 0.4, color = colors[5], linetype = "dashed") +
+  geom_hline(yintercept = 0.6, linewidth = 0.4, color = colors[5], linetype = "dashed")
+```
+
+# Cauchy shape given p
+
+(In progress)
+
+```{r}
+qcauchy(seq(-1,1,0.001), scale = 0.1) %>% plot()
+```
+
+
+# MC runs
+
+## Import and parse results
+
+```{r}
+# Fetch files containing exp_name
+experiment_files = list.files(pattern = glue("{exp_name}.*.rds"))
+
+# Fetch csv with parameter grid
+experiment_grid = list.files(pattern = glue("Grid.*{exp_name}.csv"))
+experiment_grid = read.csv(experiment_grid, header = T)
+```
+
+
+```{r}
+results_methods = data.frame()
+
+for (i in 1:nrow(experiment_grid)) {
+  exp_I = glue("Experiment:_FinalRun_giter_{i}.rds")
+  
+  
+  experimentsMC = read_rds(exp_I)
+  M = length(experimentsMC$mc_results)
+  
+  
+  gridexp_bayes_rmses = data.frame()
+  gridexp_freq_rmses = data.frame()
+  gridexp_time = data.frame()
+  for (m in 1:M) {
+    timing = experimentsMC$mc_results[[m]]$timing
+    
+    # Extract RMSEs
+    brms_rmses = experimentsMC$mc_results[[m]]$results$brms$rmses %>%
+      as.data.frame()
+    freq_rmses = experimentsMC$mc_results[[m]]$results$aft$rmses %>%
+      as.data.frame()
+    
+    # If either model failed to fit (NA)
+    if (mean(dim(freq_rmses) == c(0,0)) == 1) {
+      freq_rmses = data.frame(coef = NA, mrl = NA, bioage = NA)
+    }
+    if (mean(dim(brms_rmses) == c(0,0)) == 1) {
+      brms_rmses = data.frame(coef = NA, mrl = NA, bioage = NA)
+    }
+    gridexp_bayes_rmses = rbind(gridexp_bayes_rmses, brms_rmses)
+    gridexp_freq_rmses = rbind(gridexp_freq_rmses, freq_rmses)
+    gridexp_time = rbind(gridexp_time, timing) # Bayesian = 2 freq = 1
+  }
+  
+  # gridexp_nerr_bayes = gridexp_bayes_rmses[,1] %>% is.na() %>% sum()
+  # gridexp_nerr_freq = gridexp_freq_rmses[,1] %>% is.na() %>% sum()
+  
+  # Record performance
+  gridexp_param = experimentsMC$params
+  colnames(gridexp_param)[5] = "method"
+  # Add frequentist as a factor level for method
+  levels(gridexp_param$method) = c("horseshoe", "cauchy", "frequentist")
+  
+  gridexp_param = rbind(gridexp_param, gridexp_param)
+  # Second row is frequentist - first bayesian
+  gridexp_param[2,]$method = as.factor("frequentist")
+  
+  ## Add scores
+  # Success%
+  gridexp_param[1,"psuccess"] = (!gridexp_bayes_rmses[,1] %>% is.na()) %>% mean()
+  gridexp_param[2,"psuccess"] = (!gridexp_freq_rmses[,1] %>% is.na()) %>% mean()
+  
+  # Means
+  gridexp_param[1,c("mu_RMSE_coef","mu_RMSE_mrl", "mu_RMSE_bioage")] = colMeans(gridexp_bayes_rmses,na.rm = T)
+  gridexp_param[2,c("mu_RMSE_coef","mu_RMSE_mrl", "mu_RMSE_bioage")] = colMeans(gridexp_freq_rmses,na.rm = T)
+  
+  # Variances
+  gridexp_param[1,c("var_RMSE_coef","var_RMSE_mrl", "var_RMSE_bioage")] = 
+    apply(gridexp_bayes_rmses, 2, var, na.rm = T)
+  
+  gridexp_param[2,c("var_RMSE_coef","var_RMSE_mrl", "var_RMSE_bioage")] = 
+    apply(gridexp_freq_rmses, 2, var, na.rm = T)
+  
+  # Timing, tricky due to errors; time is of non-failed runs!
+  # Each run has a time, whether failed or not
+  bsuccesses = !gridexp_bayes_rmses[,1] %>% is.na()
+  fsuccesses = !gridexp_freq_rmses[,1] %>% is.na()
+  
+  gridexp_param[1,"mu_success_time_sec"] = mean(gridexp_time[bsuccesses,2])
+  gridexp_param[2,"mu_success_time_sec"] = mean(gridexp_time[fsuccesses,1])
+  
+  gridexp_param[1,"var_success_time_sec"] = var(gridexp_time[bsuccesses,2])
+  gridexp_param[2,"var_success_time_sec"] = var(gridexp_time[fsuccesses,1])
+
+  results_methods = rbind(results_methods, gridexp_param)
+}
+# Remove rownames added by rbind
+rownames(results_methods) = NULL
+
+# keep unique frequentist experiments (were performed twice)
+results_methods = results_methods %>%
+    distinct(n_obs, p, g, non_zero, method, .keep_all = TRUE)
+```
+
+## RMSE plots
+
+
+
+```{r}
+results_methods %>%
+  filter(non_zero == 1) %>%
+  filter(g == 4) %>%
+  # To 1 col
+  pivot_longer(cols = c(mu_RMSE_bioage, mu_RMSE_mrl),
+               names_to = "type", values_to ="RMSE") %>%
+  # Rename
+  mutate(
+    type = ifelse(type == "mu_RMSE_bioage", "Biological Age", "Mean residual life")
+  ) %>%
+  # Add variances
+  mutate(varcs = ifelse(
+    type == "Biological Age", var_RMSE_bioage, var_RMSE_mrl)
+  ) %>%
+  # plot
+  ggplot(aes(x = factor(n_obs), y = RMSE, 
+             colour = factor(p), group = factor(p))) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(aes(ymin = RMSE - sqrt(varcs)/sqrt(psuccess*100), # 100 because M = 100 
+                    ymax = RMSE + sqrt(varcs)/sqrt(psuccess*100)),
+                position = position_dodge(width = 0.5), 
+                width = 0.2) +
+  # facet_wrap(~ method) +
+  facet_grid(type ~ method, scales = "free_y") +
+  labs(title = "Performance of AccelerAge using three methods: Non-sparse case",
+     subtitle = expression(g[nz] == 1 ~ " " ~ g == 4),
+     x = expression(n[obs]), 
+     colour = "p", 
+     y = expression()) +
+  theme_linedraw() + 
+  theme(panel.grid.major = element_blank())
+```
+
+```{r}
+results_methods %>%
+  filter(non_zero == 0.25) %>%
+  filter(g == 4) %>%
+  # To 1 col
+  pivot_longer(cols = c(mu_RMSE_bioage, mu_RMSE_mrl),
+               names_to = "type", values_to ="RMSE") %>%
+  # Rename
+  mutate(
+    type = ifelse(type == "mu_RMSE_bioage", "Biological Age", "Mean residual life")
+  ) %>%
+  mutate(varcs = ifelse(
+    type == "Biological Age", var_RMSE_bioage, var_RMSE_mrl)
+  ) %>%
+  # plot
+  ggplot(aes(x = factor(n_obs), y = RMSE, 
+             colour = factor(p), group = factor(p))) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(aes(ymin = RMSE - sqrt(varcs)/sqrt(psuccess*100), # 100 because M = 100 
+                    ymax = RMSE + sqrt(varcs)/sqrt(psuccess*100)),
+                position = position_dodge(width = 0.5), 
+                width = 0.2) +
+  # facet_wrap(~ method) +
+  facet_grid(type ~ method, scales = "free_y") +
+  labs(title = "Performance of AccelerAge using three methods: Sparse case",
+     subtitle = expression(g[nz] == 0.25 ~ " " ~ g == 4),
+     x = expression(n[obs]), 
+     colour = "p", 
+     y = expression("RMSE")) +
+  theme_linedraw() + 
+  theme(panel.grid.major = element_blank())
+```
+
+```{r}
+results_methods %>%
+  filter(non_zero == 1) %>%
+  filter(g == 10) %>%
+  # To 1 col
+  pivot_longer(cols = c(mu_RMSE_bioage, mu_RMSE_mrl),
+               names_to = "type", values_to ="RMSE") %>%
+  # Rename
+  mutate(
+    type = ifelse(type == "mu_RMSE_bioage", "Biological Age", "Mean residual life")
+  ) %>%
+  mutate(varcs = ifelse(
+    type == "Biological Age", var_RMSE_bioage, var_RMSE_mrl)
+  ) %>%
+  # plot
+  ggplot(aes(x = factor(n_obs), y = RMSE, 
+             colour = factor(p), group = factor(p))) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(aes(ymin = RMSE - sqrt(varcs)/sqrt(psuccess*100), # 100 because M = 100 
+                    ymax = RMSE + sqrt(varcs)/sqrt(psuccess*100)),
+                position = position_dodge(width = 0.5), 
+                width = 0.2) +
+  # facet_wrap(~ method) +
+  facet_grid(type ~ method, scales = "free_y") +
+  labs(title = "Performance of AccelerAge using three methods: Non-sparse case",
+     subtitle = expression(g[nz] == 1 ~ " " ~ g == 10),
+     x = expression(n[obs]), 
+     colour = "p", 
+     y = expression("RMSE")) +
+  theme_linedraw() + 
+  theme(panel.grid.major = element_blank())
+```
+
+```{r}
+results_methods %>%
+  filter(non_zero == 0.25) %>%
+  filter(g == 10) %>%
+  # To 1 col
+  pivot_longer(cols = c(mu_RMSE_bioage, mu_RMSE_mrl),
+               names_to = "type", values_to ="RMSE") %>%
+  # Rename
+  mutate(
+    type = ifelse(type == "mu_RMSE_bioage", "Biological Age", "Mean residual life")
+  ) %>%
+  mutate(varcs = ifelse(
+    type == "Biological Age", var_RMSE_bioage, var_RMSE_mrl)
+  ) %>%
+  # plot
+  ggplot(aes(x = factor(n_obs), y = RMSE, 
+             colour = factor(p), group = factor(p))) +
+  geom_point(position = position_dodge(width = 0.5), size = 1) +
+  geom_errorbar(aes(ymin = RMSE - sqrt(varcs)/sqrt(psuccess*100), # 100 because M = 100 
+                    ymax = RMSE + sqrt(varcs)/sqrt(psuccess*100)),
+                position = position_dodge(width = 0.5), 
+                width = 0.2) +
+  # facet_wrap(~ method) +
+  facet_grid(type ~ method, scales = "free_y") +
+  labs(title = "Performance of AccelerAge using three methods: Sparse case",
+     subtitle = expression(g[nz] == 0.25 ~ " " ~ g == 10),
+     x = expression(n[obs]), 
+     colour = "p", 
+     y = expression("RMSE")) +
+  theme_linedraw() + 
+  theme(panel.grid.major = element_blank())
+```
+
+
+## Auxiliary plots and tables
+
+
+### Percentiles
+
+```{r}
+lp_test = exp(rnorm(1000000, sd = 0.11))
+t_test = tibble(linpred = lp_test,
+                age_of_death = stats::rweibull(n= length(lp_test),
+                                               shape = 15,
+                                               scale = 80 * lp_test))
+
+quants = quantile(t_test$linpred, probs = seq(0, 1, 0.2))
+
+t_test = t_test %>%
+    mutate(linpred_quantile = cut(
+        linpred,
+        breaks = quants,
+        include.lowest = TRUE,
+        labels = paste0(seq(0,80,20), "-", seq(20,100,20),"%")
+    ))
+
+t_test %>%
+  ggplot(aes(x = age_of_death, group = linpred_quantile, color = linpred_quantile)) +
+  geom_density(linewidth = 1.1) +
+  theme_linedraw() +
+  labs(color = "Percentile\n(Lowest to\nhighest)",
+       title = expression("Age-at-death using Weibull according to various percentiles of "
+                          * beta^T * italic(X)),
+       x = "Chronological age") +
+  xlim(c(0, 120))
+```
+
+
+### Fit table
+
+
+```{r}
+library(MASS)
+# Remove irrelevant predictors to minimize aic
+fit = lm(mu_RMSE_bioage ~ method * p * g * n_obs * non_zero,
+         data = results_methods) %>% stepAIC(direction = "both")
+
+xtable(fit %>% summary)
+```
+
+### Time
+
+```{r}
+results_methods %>% 
+  # --- For grouping
+  group_by(method, n_obs, p, g, non_zero) %>%
+  mutate(p_g = interaction(p, g)) %>%
+  # ---
+  ggplot(aes(x = as.factor(n_obs), y = mu_success_time_sec,
+             fill = as.factor(p),
+             pattern = as.factor(g))) +
+  geom_col_pattern(aes(group = p_g),
+                   position = position_dodge(width = 0.9),
+                   pattern_density = 0.01,
+                   colour = "black", size = 0.3) +
+  geom_errorbar(aes(ymin = mu_success_time_sec - sqrt(var_success_time_sec)/sqrt(psuccess*100),
+                    ymax = mu_success_time_sec + sqrt(var_success_time_sec)/sqrt(psuccess*100),
+                    group = p_g),
+                position = position_dodge(width = 0.9), width = 0.4) +
+  scale_pattern_manual(values = c("4" = "none", "10" = "stripe")) +
+  scale_fill_brewer(palette = "Set2") +
+  facet_grid(non_zero ~ method,
+             labeller = labeller(non_zero =
+                                   c("0.25" = "g_nz = 0.25",
+                                     "1" = "g_nz = 1")
+                                 )
+             ) +
+  labs(x = expression(n[obs]), y = "Mean Fit Time (seconds)",
+       fill = "p", pattern = "g") +
+  theme_linedraw() +
+  theme(legend.position = "bottom",
+        panel.grid.major = element_blank())
+```
+
+
+### Success rate
+
+```{r}
+results_methods %>% 
+  group_by(method, n_obs, p, g, non_zero) %>%
+  summarise(psuccess = mean(psuccess)) %>%
+  ggplot(aes(x = n_obs, y = psuccess, color = as.factor(p),
+             shape = as.factor(g), linetype = as.factor(non_zero),
+             group = interaction(as.factor(p), as.factor(g), as.factor(non_zero)))) +
+  geom_point(size = 2.5) +
+  scale_shape_manual(values=c(6, 18))+
+  geom_line() +
+  scale_color_brewer(palette = "Dark2") +
+  facet_wrap(~method) + 
+  labs(title = "Success rate for M = 100 experiments",
+      x = expression(n[obs]),
+      y = "Success Probability",
+      color = "p",
+      shape = "g",
+      linetype = expression(g[nz])) +
+ theme_linedraw()
+```
+
+
+### Shrinkage
+
+Will take the distributions of linpreds for each run
+
+#### Fetch data function
+
+```{r}
+tryCatch(
+  expr = {
+    all_experiments = readRDS("All_experiments.rds")
+    all_betas = readRDS("All_betas.rds")
+  }, 
+  error = function(msg){
+    
+    # Will store linear predictors
+    all_experiments = tibble()
+    
+    # Will store estimated betas vs actual with parameters
+    all_betas = tibble()
+    
+    for (i in 1:nrow(experiment_grid)) {
+      print(glue("Processing experiment {i} out of {nrow(experiment_grid)}"))
+      exp_I =  glue("Experiment:_FinalRun_giter_{i}.rds")
+      experimentsMC = read_rds(exp_I)
+      M = length(experimentsMC$mc_results)
+    
+      p = experiment_grid[i,]$p
+      n = experiment_grid[i,]$n_obs
+    
+      for (m in 1:M) {
+        # idx = ((m-1)*n + 1):(m*n)
+        
+        brms_res = experimentsMC$mc_results[[m]]$results$brms
+        freq_res = experimentsMC$mc_results[[m]]$results$aft
+        
+        # Check if either Bayesian or frequentist methods managed to converge
+        no_error_brms = !is.null(brms_res)
+        no_error_freq = !is.null(freq_res)
+      
+        # Extract the linear predictors for both methods
+        if (no_error_brms) {
+          X = brms_res$test_data[,1:p]
+          
+          # Estimated betas
+          b_bhats = brms_res$predicted_betas
+          # True betas
+          b_btrue = brms_res$true_betas$beta
+          # Corresponding groups
+          b_gtrue = brms_res$true_betas$group
+          
+          # Get true and estimated linpreds (beta^TX)
+          b_h_linpreds = rowSums(sweep(X, 2, b_bhats, "*"))
+          true_linpreds = rowSums(sweep(X, 2, b_btrue, "*"))
+          
+          # Get weibull distribution estimates
+          b_shape = brms_res$distr_ests$shape
+          b_scale = brms_res$distr_ests$scale
+          
+          idx = 1:length(b_h_linpreds)
+          # Append bayesian rows to all experiment frame
+          bayes_row = tibble(
+            experiment = i,
+            Mc_rep = m,
+            id = idx,
+            linpreds = b_h_linpreds,
+            # true_linpreds = b_t_linpreds,
+            method = experiment_grid[i,]$beta_prior,
+            n_obs = experiment_grid[i,]$n_obs,
+            p = experiment_grid[i,]$p,
+            g = experiment_grid[i,]$g,
+            non_zero = experiment_grid[i,]$non_zero,
+            shape = b_shape,
+            scale = b_scale
+          )
+          all_experiments = bind_rows(all_experiments, bayes_row)
+          
+          
+          idx = 1:length(b_btrue)
+          # Append rows to betaframe
+          beta_rows = tibble(
+            experiment = i,
+            Mc_rep = m,
+            beta_id = idx,
+            true_beta = b_btrue,
+            betahat = b_bhats,
+            beta_group = b_gtrue,
+            method = experiment_grid[i,]$beta_prior,
+            n_obs = experiment_grid[i,]$n_obs,
+            p = experiment_grid[i,]$p,
+            g = experiment_grid[i,]$g,
+            non_zero = experiment_grid[i,]$non_zero
+          )
+          all_betas = bind_rows(all_betas, beta_rows)
+          
+        }
+        
+        if (no_error_freq) {
+          X = freq_res$test_data[,1:p]
+          # Estimated betas
+          f_bhats = freq_res$predicted_betas
+          # True betas
+          f_btrue = freq_res$true_betas$beta
+          # Corresponding true groups
+          f_gtrue = freq_res$true_betas$group
+          
+          # Get true and estimated linpreds (beta^TX)
+          f_h_linpreds = rowSums(sweep(X, 2, f_bhats, "*"))
+          true_linpreds = rowSums(sweep(X, 2, f_btrue, "*"))
+          
+          # Get weibull distribution estimates
+          f_shape = freq_res$distr_ests$shape %>% as.numeric()
+          f_scale = freq_res$distr_ests$scale %>% as.numeric()
+          
+          idx = 1:length(f_h_linpreds)
+          # Append frequentist rows to df
+          freq_row = tibble(
+            experiment = i,
+            Mc_rep = m,
+            id = idx,
+            linpreds = f_h_linpreds,
+            # true_linpreds = f_t_linpreds,
+            method = "frequentist",
+            n_obs = experiment_grid[i,]$n_obs,
+            p = experiment_grid[i,]$p,
+            g = experiment_grid[i,]$g,
+            non_zero = experiment_grid[i,]$non_zero,
+            shape = f_shape,
+            scale = f_scale
+          )
+          all_experiments = bind_rows(all_experiments, freq_row)
+          
+          
+          idx = 1:length(f_btrue)
+          # Append rows to betaframe
+          beta_rows = tibble(
+            experiment = i,
+            Mc_rep = m,
+            beta_id = idx,
+            true_beta = f_btrue,
+            betahat = f_bhats,
+            beta_group = f_gtrue,
+            method = "frequentist",
+            n_obs = experiment_grid[i,]$n_obs,
+            p = experiment_grid[i,]$p,
+            g = experiment_grid[i,]$g,
+            non_zero = experiment_grid[i,]$non_zero
+          )
+          all_betas = bind_rows(all_betas, beta_rows)
+        }
+        
+        # Append the true linear predictors
+        if (no_error_freq || no_error_brms) {
+          idx = 1:length(true_linpreds)
+          true_row = tibble(
+            experiment = i,
+            Mc_rep = m,
+            id = idx,
+            linpreds = true_linpreds,
+            # true_linpreds = f_t_linpreds,
+            method = "true",
+            n_obs = experiment_grid[i,]$n_obs,
+            p = experiment_grid[i,]$p,
+            g = experiment_grid[i,]$g,
+            non_zero = experiment_grid[i,]$non_zero,
+            # True shape and scale used in experiments
+            shape = 15,
+            scale = 80
+          )
+          all_experiments = bind_rows(all_experiments, true_row)
+        }
+        
+        # # Get true linpreds from working method
+        # true_linpreds = if (no_error_brms) b_t_linpreds else f_t_linpreds
+        # 
+        # # Create data frame rows
+        # new_rows = tibble(experiment = i, Mc_rep = m,
+        #                   freq_hat_linpreds = f_h_linpreds,
+        #                   bayes_hat_linpreds = b_h_linpreds,
+        #                   true_linpreds = true_linpreds,
+        #                   bmethod = experiment_grid[i,]$beta_prior,
+        #                   n_obs = experiment_grid[i,]$n_obs,
+        #                   p = experiment_grid[i,]$p,
+        #                   g = experiment_grid[i,]$g,
+        #                   non_zero =experiment_grid[i,]$non_zero)
+        # 
+        
+        # Append to all experiment dataframe
+    
+        # all_experiments = all_experiments %>% bind_rows(new_rows)
+      }
+    }
+    
+    #Save output to avoid re-computing
+    saveRDS(all_experiments, file = "All_experiments.rds")
+    saveRDS(all_betas, file = "All_betas.rds")
+  }
+  )
+all_experiments = readRDS("All_experiments.rds")
+all_betas = readRDS("All_betas.rds")
+```
+
+
+```{r} 
+# Keep unique parameter cominations
+all_experiments = all_experiments %>%
+    distinct(Mc_rep, id, method, n_obs, p, g, non_zero, .keep_all = TRUE)
+all_betas = all_betas %>%
+  distinct(experiment, Mc_rep, beta_id,  method, n_obs, p, g, non_zero, .keep_all = TRUE)
+```
+
+```{r}
+all_experiments %>%
+  filter(g == 4, non_zero == 0.25) %>%
+  ggplot(aes(x = method, y = linpreds, fill = method, color = method)) +
+  geom_violin(alpha = 0.7, draw_quantiles = c(0.25, 0.5, 0.75)) +
+  # geom_jitter(width = 0.1, alpha = 0.5, size = geom_boxplot() +
+  geom_vline(xintercept = 3.5, alpha = 1) +
+  facet_grid(p ~ n_obs, labeller = labeller(
+    p = function(x) paste("p =", x),
+    n_obs = function(x) paste("n =", x)
+  )) +
+  labs(y = "Linear Predictor", x = "Method",
+      title = expression("Distribution of the linear predictor "
+                        * hat(beta)^T * italic(X) * " compared to true effect "
+                        * beta^T * italic(X)),
+      subtitle = expression("For g = 4, " * g[nz] * " = 0.25")
+      ) +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+all_experiments %>%
+  filter(g == 10, non_zero == 0.25) %>%
+  ggplot(aes(x = method, y = linpreds, fill = method)) +
+  geom_violin(alpha = 0.7, draw_quantiles = c(0.25, 0.5, 0.75)) +
+  geom_vline(xintercept = 3.5, alpha = 1) +
+  facet_grid(p ~ n_obs, labeller = labeller(
+    p = function(x) paste("p =", x),
+    n_obs = function(x) paste("n =", x)
+  )) +
+  labs(y = "Linear Predictor", x = "Method",
+      title = expression("Distribution of the linear predictor "
+                         * hat(beta)^T * italic(X) * " compared to true effect "
+                         * beta^T * italic(X)),
+      subtitle = expression("For g = 10, " * g[nz] * " = 0.25")
+       ) +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+all_experiments %>%
+  filter(g == 4, non_zero == 1) %>%
+  ggplot(aes(x = method, y = linpreds, fill = method)) +
+  geom_violin(alpha = 0.7, draw_quantiles = c(0.25, 0.5, 0.75)) +
+  geom_vline(xintercept = 3.5) +
+  facet_grid(p ~ n_obs, labeller = labeller(
+    p = function(x) paste("p =", x),
+    n_obs = function(x) paste("n =", x)
+  )) +
+  labs(y = "Linear Predictor", x = "Method",
+      title = expression("Distribution of the linear predictor "
+                         * hat(beta)^T * italic(X) * " compared to true effect "
+                         * beta^T * italic(X)),
+      subtitle = expression("For g = 4, " * g[nz] * " = 1")
+       ) +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+all_experiments %>%
+  filter(g == 10, non_zero == 1) %>%
+  ggplot(aes(x = method, y = linpreds, fill = method)) +
+  geom_violin(alpha = 0.7, draw_quantiles = c(0.25, 0.5, 0.75)) +
+  geom_vline(xintercept = 3.5) +
+  facet_grid(p ~ n_obs, labeller = labeller(
+    p = function(x) paste("p =", x),
+    n_obs = function(x) paste("n =", x)
+  )) +
+  labs(y = "Linear Predictor", x = "Method",
+      title = expression("Distribution of the linear predictor "
+                         * hat(beta)^T * italic(X) * " compared to true effect "
+                         * beta^T * italic(X)),
+      subtitle = expression("For g = 10, " * g[nz] * " = 1")
+       ) +
+  theme_linedraw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### Shape and scale quality
+
+```{r}
+
+# Remove true (not needed, shape = 15, scale = 80)
+est_experiments = all_experiments %>% filter(method != "true") %>%
+  distinct(Mc_rep, method, n_obs, p, g, non_zero, .keep_all = TRUE) %>%
+  dplyr::select(-c(experiment, id, linpreds)) %>%
+  arrange(Mc_rep, n_obs, p, g, non_zero) %>%
+  mutate(pg = interaction(p, g, sep = " / "))
+
+
+# Sparse case
+# Top plot (shape)
+p1 = est_experiments %>%
+  filter(non_zero == 0.25) %>%
+  ggplot(aes(x = as.factor(n_obs), y = shape, fill = as.factor(pg))) +
+  geom_hline(yintercept = 15, colour = "black", linetype = "dashed") +
+  geom_violin() +
+  scale_fill_brewer(palette="Dark2") +
+  #geom_jitter(alpha = 0.4) +
+  facet_wrap(~method) +
+  theme_linedraw() +
+  theme(legend.position = "none") +
+  labs(x = expression(n[obs]), y = "Shape", fill = "p / g") +
+  guides(pattern = "none") + labs(title = "Performance of Weibull parameter estimation", 
+                                  subtitle = expression("sparse case " * g[nz] == 0.25))
+
+p2 = est_experiments %>%
+  filter(non_zero == 0.25) %>%
+  ggplot(aes(x = as.factor(n_obs), y = scale, fill = as.factor(pg))) +
+  geom_hline(yintercept = 80, colour = "black", linetype = "dashed") +
+  geom_violin() +
+  scale_fill_brewer(palette="Dark2") +
+  #geom_jitter(alpha = 0.4) +
+  facet_wrap(~method) +
+  theme_linedraw() +
+  theme(strip.text.x = element_blank()) +
+  labs(x = expression(n[obs]), y = "Scale", fill = "p / g")
+  
+
+(p1/p2)
+```
+
+```{r}
+
+# Non-sparse case
+# Top plot (shape)
+p1 = est_experiments %>%
+  filter(non_zero == 1) %>%
+  ggplot(aes(x = as.factor(n_obs), y = shape, fill = as.factor(pg))) +
+  geom_hline(yintercept = 15, colour = "black", linetype = "dashed") +
+  geom_violin() +
+  scale_fill_brewer(palette="Dark2") +
+  #geom_jitter(alpha = 0.4) +
+  facet_wrap(~method) +
+  theme_linedraw() +
+  theme(legend.position = "none") +
+  labs(x = expression(n[obs]), y = "Shape", fill = "p / g") +
+  guides(pattern = "none") + labs(title = "Performance of Weibull parameter estimation", 
+                                  subtitle = expression("non-sparse case " * g[nz] == 1))
+
+p2 = est_experiments %>%
+  filter(non_zero == 1) %>%
+  ggplot(aes(x = as.factor(n_obs), y = scale, fill = as.factor(pg))) +
+  geom_hline(yintercept = 80, colour = "black", linetype = "dashed") +
+  geom_violin() +
+  scale_fill_brewer(palette="Dark2") +
+  #geom_jitter(alpha = 0.4) +
+  facet_wrap(~method) +
+  theme_linedraw() +
+  theme(strip.text.x = element_blank()) +
+  labs(x = expression(n[obs]), y = "Scale", fill = "p / g")
+  
+
+(p1/p2)
+```
+## Betas
+
+```{r}
+all_betas %>%
+  filter(non_zero == 1) %>%
+  mutate(g_gnz = interaction(g, non_zero)) %>%
+  ggplot(aes(x = true_beta, y = betahat)) +
+  geom_point(aes(color = as.factor(g)), alpha = 0.5) +
+  scale_shape_manual(values = c(16, 21)) +
+  facet_grid(as.factor(p) ~ method,
+           labeller = labeller(
+             `as.factor(p)` = function(x) paste("p =", x)
+           )) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, colour = "black", linetype = "dashed") +
+  geom_smooth(aes(group = as.factor(n_obs), linetype = as.factor(n_obs)), 
+            method = "lm", se = T, size = 0.7, fullrange = TRUE) +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = "dashed") +
+  theme_linedraw() +
+  labs(
+    x = expression(beta),
+    y = expression(hat(beta)),
+    color = "g",
+    linetype = expression(n[obs]),
+    title = expression(hat(beta) * " versus actual " * beta * " for all experiments in non-sparse case")
+  )
+```
+
+
+```{r}
+all_betas %>%
+  filter(non_zero != 1) %>%
+  mutate(g_gnz = interaction(g, non_zero)) %>%
+  ggplot(aes(x = true_beta, y = betahat)) +
+  geom_point(aes(color = as.factor(g)), alpha = 0.5) +
+  scale_shape_manual(values = c(16, 21)) +
+  facet_grid(as.factor(p) ~ method,
+           labeller = labeller(
+             `as.factor(p)` = function(x) paste("p =", x)
+           )) +
+  geom_vline(xintercept = 0, colour = "black", linetype = "dashed") +
+  geom_hline(yintercept = 0, colour = "black", linetype = "dashed") +
+  geom_smooth(aes(group = as.factor(n_obs), linetype = as.factor(n_obs)), 
+            method = "lm", se = T, size = 0.7, fullrange = TRUE) +
+  geom_abline(intercept = 0, slope = 1, colour = "red", linetype = "dashed") +
+  theme_linedraw() +
+  labs(
+    x = expression(beta),
+    y = expression(hat(beta)),
+    color = "g",
+    linetype = expression(n[obs]),
+    title = expression(hat(beta) * " versus actual " * beta * " for all experiments in sparse case")
+  )
+```
+
+# Simulated data
+
+Will show: Betas, X
+
+```{r}
+# Import libraries needed to simulate
+source("R/generate_data.R")
+
+
+# Data generation wrapper from main script
+generate_data = function(pop_n, obs_n, p, g, ltname, seed, force_recalc, X_plots, 
+                         X_rho, β_rho, non_zero_betas, X_scale, active_hazard, 
+                         betasep, bscale, betaplot = F, target_snr = 2, 
+                         method = "weibull", a, b) {
+  
+  print("Generating βs...")
+  betas = generate_betas(p = p, g=g, rho = β_rho, rho_between = 0,
+                       seed = seed, mu_u = betasep, mu_l = -betasep, 
+                       beta_scale = bscale, plot = betaplot, 
+                       non_zero_groups = non_zero_betas, 
+                       active_hazard = active_hazard,
+                       target_snr = target_snr,
+                       method = method, # Different scaling for different methods
+                       weib_shape = a, weib_scale = b,
+                       gomp_a = a, gomp_b = b)
+  
+  # betas$beta = betas$beta + 0.01
+  
+  
+  print("Generating X...")
+  X = generate_X(n = pop_n, p = p, g = g, rho = X_rho, seed = seed,
+                 rho_between = 0, X_plots = X_plots, scale = X_scale)
+  print("Done!")
+
+  
+  if (method == "weibull") {
+    # a = shape
+    # b = scale
+    print("Generating Weibull population lifetable...")
+    lt = generate_population_lifetable_weibull(N_pop = pop_n, M = p, 
+                                              betas = betas$beta, X = X$X, 
+                                              filename = ltname, seed = seed, 
+                                              force_recalc = force_recalc, 
+                                              a = a, b = b)  # Weibull params
+    print("Done!")
+    
+    plot = ggplot(lt, aes(x = t, y = mrl)) +
+      geom_line() +
+      labs(title = "Weibull Population Lifetable MRL",
+           x = "Chronological age (years)", y = "Mean Residual Life") +
+      theme_minimal()
+    print(plot)
+    
+    print("Generating data from Weibull lifetable...")
+    df_sim = create_dataset_weibull(M = p, n_obs = obs_n, G = g,
+                                   gsize = (p/g), lt = lt, betas = betas$beta,
+                                   seednr = seed+1, X_plots = F, 
+                                   a = a, b = b,  # Weibull params
+                                   X_rho = X_rho, X_scale = X_scale, 
+                                   followup = 20) # Nr years followed
+    
+  } else {
+    print("Generating Gompertz population lifetable...")
+    stop() # Not yet implemented
+    lt = generate_population_lifetable_gompertz(N_pop = pop_n, M = p, 
+                                               betas = betas$beta, X = X$X, 
+                                               filename = ltname, seed = seed, 
+                                               force_recalc = force_recalc, 
+                                               a = a, b = b)  # Gompertz params
+    print("Done!")
+    
+    plot = ggplot(lt, aes(x = t, y = mrl)) +
+      geom_line() +
+      labs(title = "Gompertz Population Lifetable MRL",
+           x = "Chronological age (years)", y = "Mean Residual Life") +
+      theme_minimal()
+    print(plot)
+    
+    print("Generating data from Gompertz lifetable...")
+    df_sim = create_dataset_gompretz(M = p, n_obs = obs_n, G = g,
+                                    gsize = (p/g), lt = lt, betas = betas$beta,
+                                    seednr = seed+1, X_plots = F, 
+                                    a = a, b = b,  # Gompertz params
+                                    X_rho = X_rho, X_scale = X_scale, 
+                                    followup = 20) # Nr years followed
+  }
+  
+  print("Done!")
+  return(list(df = df_sim, true_betas = betas, lt = lt))
+}
+
+
+```
+
+
+
+```{r}
+
+# p = 50, g = 10, g_nz = 0.5
+test_case0.1 = generate_data(pop_n = 10000, obs_n = 1000, p = 50,g = 10,
+                           ltname = "plots", seed = 123, force_recalc = T,
+                           X_plots = T, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = T,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)
+
+# p = 500, g = 10, g_nz = 0.5
+test_case0.2 = generate_data(pop_n = 10000, obs_n = 1000, p = 500,g = 10,
+                           ltname = "plots", seed = 123, force_recalc = T,
+                           X_plots = T, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = T,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)
+
+
+# p = 50, g = 10, g_nz = 1
+test_case1.1 = generate_data(pop_n = 10000, obs_n = 1000, p = 50,g = 10,
+                           ltname = "plots", seed = 123, force_recalc = T,
+                           X_plots = T, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 1, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = T,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)
+
+# p = 500, g = 10, g_nz = 1
+test_case1.2 = generate_data(pop_n = 10000, obs_n = 1000, p = 500,g = 10,
+                           ltname = "plots", seed = 123, force_recalc = T,
+                           X_plots = T, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 1, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = T,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)
+
+# p=g 
+# Error in eigen(Sigma, symmetric = TRUE) :
+# infinite or missing values in 'x',
+# look into this
+# So, p -> g
+
+# special_case = generate_data(pop_n = 10000, obs_n = 1000, p = 40, g = 20,
+#                            ltname = "plots", seed = 123, force_recalc = T,
+#                            X_plots = T, X_rho = 0.4, β_rho = 0.4, 
+#                            non_zero_betas = 1, X_scale = 1, active_hazard = 0,
+#                            betasep = 0.1, bscale = 1, betaplot = T,
+#                            target_snr = 4, method = "weibull", a = 15, b = 80)
+
+```
+## Case 0.1
+
+
+### Beta
+```{r}
+# p = 50, g = 10, g_nz = 0.5
+decimals = 2
+b_data = test_case0.1
+p = 50
+g_nz = 0.5
+
+
+group_labels = b_data$true_betas %>%
+  group_by(group) %>%
+  summarise(
+    mean_beta = round(mean(beta), decimals),
+    sd_beta = round(sd(beta), decimals),
+    .groups = 'drop'
+  ) %>%
+  mutate(label = glue("{group} (μ={mean_beta}, σ={sd_beta})"))
+
+b_data$true_betas %>%
+  ggplot(aes(x = as.factor(group), y = beta, fill = as.factor(group),
+             colour = as.factor(group))) +
+  geom_boxplot(outliers = F, colour = "black") +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_jitter(shape = 21, colour = "black", width = 0.2, size = 1.5) +
+  scale_fill_discrete(labels = group_labels$label) +
+  theme_linedraw() +
+  labs(title = "Distribution of true β-values",
+       subtitle = bquote(
+         g == 10 ~ " " ~ g[nz] == .(g_nz) ~ " " ~ p == .(p) ~ " | " ~
+         mu == .(round(mean(b_data$true_betas$beta), decimals)) ~ " " ~
+         sigma == .(round(sd(b_data$true_betas$beta), decimals))
+       ),
+       x = "Group",
+       y = expression(beta),
+       fill = "Group Number") +
+  guides(colour = "none")
+```
+
+### X
+
+```{r}
+
+# Extract covariates (not survival values)
+X = as.matrix(test_case0.1$df[, 1:50])
+
+# Overall summary stats
+mu = round(mean(X), 2)
+sigma = round(sd(X), 2)
+corr_mat = cor(X)
+corr_long = as.data.frame(as.table(corr_mat))
+
+# Correlation plot of X
+p1 = ggplot(corr_long, aes(x = Var1, y = Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank()) +
+  labs(title = "Correlation and raw values of X",
+       subtitle = glue("Overall μ={mu}, σ={sigma}"),
+       fill = "Corr")
+
+heatmap_data = as.data.frame(as.table(X))
+
+# X values as-is
+p2 = ggplot(heatmap_data, aes(x = Var2, y = Var1, fill = Freq)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank()) +
+  labs(fill = "Value", y = "Individual", x = "Covariates")
+
+p1 + p2
+```
+
+
+### T_e
+
+```{r}
+surv_obj = Surv(time = test_case0.1$df$age_start,
+                time2 = test_case0.1$df$age_end,
+                event = test_case0.1$df$status)
+
+fit = survfit(surv_obj ~ 1, data = test_case0.1$df)
+
+ggsurvplot(fit,
+           title = "Survival of simulated individuals",
+           xlab = "Age (years)",
+           ylab = "Survival Probability",)
+
+```
+
+## Case 0.2
+
+
+### Beta
+```{r}
+# p = 500, g = 10, g_nz = 0.5
+decimals = 3
+b_data = test_case0.2
+p = 500
+g_nz = 0.5
+
+group_labels = b_data$true_betas %>%
+  group_by(group) %>%
+  summarise(
+    mean_beta = round(mean(beta), decimals),
+    sd_beta = round(sd(beta), decimals),
+    .groups = 'drop'
+  ) %>%
+  mutate(label = glue("{group} (μ={mean_beta}, σ={sd_beta})"))
+
+b_data$true_betas %>%
+  ggplot(aes(x = as.factor(group), y = beta, fill = as.factor(group),
+             colour = as.factor(group))) +
+  geom_boxplot(outliers = F, colour = "black") +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_jitter(shape = 21, colour = "black", width = 0.2, size = 1.5) +
+  scale_fill_discrete(labels = group_labels$label) +
+  theme_linedraw() +
+  labs(title = "Distribution of true β-values",
+       subtitle = bquote(
+         g == 10 ~ " " ~ g[nz] == .(g_nz) ~ " " ~ p == .(p) ~ " | " ~
+         mu == .(round(mean(b_data$true_betas$beta), decimals)) ~ " " ~
+         sigma == .(round(sd(b_data$true_betas$beta), decimals))
+       ),
+       x = "Group",
+       y = expression(beta),
+       fill = "Group Number") +
+  guides(colour = "none")
+```
+
+
+
+## Case 1.1
+
+
+### Beta
+```{r}
+# p = 50, g = 10, g_nz = 1
+decimals = 3
+b_data = test_case1.1
+p = 50
+g_nz = 1
+
+
+group_labels = b_data$true_betas %>%
+  group_by(group) %>%
+  summarise(
+    mean_beta = round(mean(beta), decimals),
+    sd_beta = round(sd(beta), decimals),
+    .groups = 'drop'
+  ) %>%
+  mutate(label = glue("{group} (μ={mean_beta}, σ={sd_beta})"))
+
+b_data$true_betas %>%
+  ggplot(aes(x = as.factor(group), y = beta, fill = as.factor(group),
+             colour = as.factor(group))) +
+  geom_boxplot(outliers = F, colour = "black") +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_jitter(shape = 21, colour = "black", width = 0.2, size = 1.5) +
+  scale_fill_discrete(labels = group_labels$label) +
+  theme_linedraw() +
+  labs(title = "Distribution of true β-values",
+       subtitle = bquote(
+         g == 10 ~ " " ~ g[nz] == .(g_nz) ~ " " ~ p == .(p) ~ " | " ~
+         mu == .(round(mean(b_data$true_betas$beta), decimals)) ~ " " ~
+         sigma == .(round(sd(b_data$true_betas$beta), decimals))
+       ),
+       x = "Group",
+       y = expression(beta),
+       fill = "Group Number") +
+  guides(colour = "none")
+```
+
+
+## Case 1.2
+
+
+### Beta
+```{r}
+# p = 500, g = 10, g_nz = 1
+decimals = 3
+b_data = test_case1.2
+p = 500
+g_nz = 1
+
+
+group_labels = b_data$true_betas %>%
+  group_by(group) %>%
+  summarise(
+    mean_beta = round(mean(beta), decimals),
+    sd_beta = round(sd(beta), decimals),
+    .groups = 'drop'
+  ) %>%
+  mutate(label = glue("{group} (μ={mean_beta}, σ={sd_beta})"))
+
+b_data$true_betas %>%
+  ggplot(aes(x = as.factor(group), y = beta, fill = as.factor(group),
+             colour = as.factor(group))) +
+  geom_boxplot(outliers = F, colour = "black") +
+  geom_hline(yintercept = 0, linewidth = 0.2) +
+  geom_jitter(shape = 21, colour = "black", width = 0.2, size = 1.5) +
+  scale_fill_discrete(labels = group_labels$label) +
+  theme_linedraw() +
+  labs(title = "Distribution of true β-values",
+       subtitle = bquote(
+         g == 10 ~ " " ~ g[nz] == .(g_nz) ~ " " ~ p == .(p) ~ " | " ~
+         mu == .(round(mean(b_data$true_betas$beta), decimals)) ~ " " ~
+         sigma == .(round(sd(b_data$true_betas$beta), decimals))
+       ),
+       x = "Group",
+       y = expression(beta),
+       fill = "Group Number") +
+  guides(colour = "none")
+```
+
+
+## Lifetables and SNR (p on mrl)
+
+Will do 8 cases:
+- snr = 1, p = 200
+- snr = 1, p = 20
+
+- snr = 2; p = 200
+- snr = 2; p = 20
+
+- snr = 4, p = 200
+- snr = 4, p = 20
+
+- snr = 8; p = 200
+- snr = 8; p = 20
+Then plot in same figure
+
+
+```{r}
+c1 = generate_data(pop_n = 100000, obs_n = 1000, p = 200, g = 10,
+                           ltname = "plots", seed = 123, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 1, method = "weibull", a = 15, b = 80)$lt
+
+c2 = generate_data(pop_n = 100000, obs_n = 1000, p = 20, g = 10,
+                           ltname = "plots", seed = 124, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 1, method = "weibull", a = 15, b = 80)$lt
+
+c3 = generate_data(pop_n = 100000, obs_n = 1000, p = 200, g = 10,
+                           ltname = "plots", seed = 125, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)$lt
+
+c4 = generate_data(pop_n = 100000, obs_n = 1000, p = 20, g = 10,
+                           ltname = "plots", seed = 126, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 2, method = "weibull", a = 15, b = 80)$lt
+
+c5 = generate_data(pop_n = 100000, obs_n = 1000, p = 200, g = 10,
+                           ltname = "plots", seed = 127, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 4, method = "weibull", a = 15, b = 80)$lt
+
+
+c6 = generate_data(pop_n = 100000, obs_n = 1000, p = 20, g = 10,
+                           ltname = "plots", seed = 128, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 4, method = "weibull", a = 15, b = 80)$lt
+
+c7 = generate_data(pop_n = 100000, obs_n = 1000, p = 200, g = 10,
+                           ltname = "plots", seed = 129, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 0.1, bscale = 1, betaplot = F,
+                           target_snr = 8, method = "weibull", a = 15, b = 80)$lt
+
+c8 = generate_data(pop_n = 100000, obs_n = 1000, p = 20, g = 10,
+                           ltname = "plots", seed = 130, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1, betaplot = F,
+                           target_snr = 8, method = "weibull", a = 15, b = 80)$lt
+
+# Case where tSNR is not used p = 20 and p = 200
+
+c9 = generate_data(pop_n = 100000, obs_n = 1000, p = 200, g = 10,
+                           ltname = "plots", seed = 131, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1/400, betaplot = F,
+                           target_snr = 0, method = "weibull", a = 15, b = 80)$lt
+
+c10 = generate_data(pop_n = 100000, obs_n = 1000, p = 20, g = 10,
+                           ltname = "plots", seed = 132, force_recalc = T,
+                           X_plots = F, X_rho = 0.4, β_rho = 0.4, 
+                           non_zero_betas = 0.5, X_scale = 1, active_hazard = 0,
+                           betasep = 4, bscale = 1/40, betaplot = F,
+                           target_snr = 0, method = "weibull", a = 15, b = 80)$lt
+
+```
+
+
+```{r}
+ps = c(200,20,200,20,200,20,200,20, 200, 20)
+tsnrs = c(1,1,2,2,4,4,8,8, "None", "None")
+ggplot() +
+  geom_line(aes(x = c1$t, y = c1$mrl, colour = as.factor(tsnrs[1]), linetype = as.factor(ps[1]))) +
+  geom_line(aes(x = c2$t, y = c2$mrl, colour = as.factor(tsnrs[2]), linetype = as.factor(ps[2]))) +
+  geom_line(aes(x = c3$t, y = c3$mrl, colour = as.factor(tsnrs[3]), linetype = as.factor(ps[3]))) +
+  geom_line(aes(x = c4$t, y = c4$mrl, colour = as.factor(tsnrs[4]), linetype = as.factor(ps[4]))) +
+  geom_line(aes(x = c5$t, y = c5$mrl, colour = as.factor(tsnrs[5]), linetype = as.factor(ps[5]))) +
+  geom_line(aes(x = c6$t, y = c6$mrl, colour = as.factor(tsnrs[6]), linetype = as.factor(ps[6]))) +
+  geom_line(aes(x = c7$t, y = c7$mrl, colour = as.factor(tsnrs[7]), linetype = as.factor(ps[7]))) +
+  geom_line(aes(x = c8$t, y = c8$mrl, colour = as.factor(tsnrs[8]), linetype = as.factor(ps[8]))) +
+  # No SNR scaling
+  geom_line(aes(x = c9$t, y = c9$mrl, colour = as.factor(tsnrs[9]), linetype = as.factor(ps[9]))) +
+  geom_line(aes(x = c10$t, y = c10$mrl, colour = as.factor(tsnrs[10]), linetype = as.factor(ps[10]))) +
+  labs(y = "Mean residual life", x = "Chronological age (years)", colour = expression(t[snr]),
+       linetype = "p", title = "Comparison of population lifetables",
+       subtitle = expression("For various p and " * t[snr])) +
+  theme_linedraw()
+```
+

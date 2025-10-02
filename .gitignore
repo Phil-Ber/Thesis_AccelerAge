@@ -5,3 +5,7 @@
 *.rds
 *.html
 *.xlsx
+fixB.R
+old/
+plots/
+FinalRunBackup/

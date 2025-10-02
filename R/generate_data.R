@@ -43,7 +43,7 @@ generate_population_lifetable_gompertz = function(
       t[i] = t_i
     }
     
-    print(glue("Range of death: {range(t)}"))
+    print(glue("Range of death: {paste(range(t), collapse = ' – ')}"))
     
     plot(ecdf(t), xlim = c(0,100), main = "Cumulative ")
     
@@ -121,7 +121,6 @@ create_dataset_gompretz = function(
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
     age_death[i] <- rgompertz_aft(1, sigma = sigma, linpred = linpred[i], tau = tau)
-    # age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
     
   }
   
@@ -154,7 +153,7 @@ create_dataset_gompretz = function(
     mrl_uncon <- integrate(gomp_baseline_surv, lower = (df_sim$age_start[i] * exp(df_sim$linpred[i])), 
                            upper=Inf, a = a, b = b)$value
     s_cond <-  gomp_baseline_surv(df_sim$age_start[i] * exp(df_sim$linpred[i]), a = a, b = b) 
-    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-df_sim$linpred[i])
+    df_sim$mrl[i] <- (mrl_uncon / s_cond)
   }
   
   # Get biological age (via population lifetable)
@@ -209,35 +208,18 @@ generate_population_lifetable_weibull = function(
     
     
     lambda <- scale^(-shape) # Bender parameterization
-    nu <- shape
     
     
     t = vector(length = N_pop)                                                     
     for (i in 1:N_pop){
       # t_i = rweibull_custom(1, lambda = lambda, nu = nu, linpred = linpred[i]) # vector of ages-of-death
-      t_i = stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
-      # ---
-      # Take the opposite sign of linpred, as we expect that the exp
-      # of a negative value returns a lower value than 1 -> person ages slower;
-      # death is more likely to occur later!
-      # Example of when linpred = -0.2:
-      
-      # plot(pweibull(seq(0,120, 0.01), shape = 10, scale = 80))
-      # lines(pweibull(seq(0,120, 0.01), shape = 10, scale = 80 * exp(-(-0.2))), col = "green", lwd = 2)
-      
-      # Here the person is ageing ~0.81 speed of normal -> Line shifts to right
-      # This would be the same as doing:
-      
-      # plot(pweibull(seq(0,120, 0.01), shape = 10, scale = 80))
-      # lines(pweibull(seq(0,120, 0.01) * exp(-0.2), shape = 10, scale = 80), col = "green", lwd = 10)
-      # lines(pweibull(seq(0,120, 0.01), shape = 10, scale = 80 * exp(-(-0.2))), col = "blue", lwd = 3)
-      
-      # But in the shape it needs to be the opposite sign.
-      # ---
+      t_i = stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
       t[i] = t_i
     }
+      
     
-    print(glue("Range of death: {range(t)}"))
+    
+    print(glue("Range of death: {paste(range(t), collapse = ' – ')}"))
     
     plot(ecdf(t), xlim = c(0,150), main = "Cumulative of mortality")
     
@@ -296,11 +278,14 @@ create_dataset_weibull = function(
   shape = a
   scale = b
   
+  # Unused
   lambda <- scale^(-shape)
   nu <- shape
   
+  
   n_gen <- 5 * n_obs # 5 TIMES as many to ensure I generate enough, because for some T < C => not observed
   
+  # Simulate dataframe
   result = generate_X(n = n_gen, p = M, g = G, rho = X_rho, rho_between = 0, seed = seednr, scale = X_scale, X_plots = X_plots)
   
   X = result$X # Extract X from the list
@@ -315,7 +300,7 @@ create_dataset_weibull = function(
   # Get age of death
   age_death <- vector(length = n_gen)
   for (i in 1:n_gen){
-    age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(-linpred[i]))
+    age_death[i] <- stats::rweibull(1, shape = shape, scale = scale * exp(linpred[i]))
   }
   
   # Remove observations that are left-truncated
@@ -323,7 +308,7 @@ create_dataset_weibull = function(
   
   # Check if we have enough valid cases
   if (length(valid_indices) < n_obs) {
-    warning(paste("Only", length(valid_indices), "valid cases where age_start < age_death, but", n_obs, "requested."))
+    warning(glue("Only {length(valid_indices)} valid cases where age_start < age_death, but {n_obs} requested."))
     # Use all available valid indices
     indx_obs <- valid_indices
   } else {
@@ -339,7 +324,7 @@ create_dataset_weibull = function(
   
   cat("Range of linpred values:", range(linpred), "\n")
   if(any(is.infinite(exp(linpred)))) {
-    warning("Some exp(linpred) values are Inf - consider scaling betas down further")
+    warning("Some exp(linpred) values are Inf")
   }
   
   # S_weibull_cov <- function(t, shape, scale_adj) { # Weibull function from script
@@ -358,14 +343,14 @@ create_dataset_weibull = function(
 
   
   for (i in 1:nrow(df_sim)) {
-    scale_adj = scale * exp(-df_sim$linpred[i])
+    scale_adj = scale * exp(df_sim$linpred[i])
     
     mrl_uncon <- integrate(function(t) {
       1 - pweibull(t, shape = shape, scale = scale_adj)
     }, lower = df_sim$age_start[i], upper = Inf)$value
 
     s_cond <- 1 - pweibull(df_sim$age_start[i], shape = shape, scale = scale_adj)
-    df_sim$mrl[i] <- (mrl_uncon / s_cond) * exp(-df_sim$linpred[i])
+    df_sim$mrl[i] <- (mrl_uncon / s_cond)
     
     # s_t <- S_weibull_cov(t_vec, shape, scale_i)
     # integral <- sapply(t_vec, function(ti) {
@@ -393,38 +378,6 @@ create_dataset_weibull = function(
 }
 
 
-# sim_grouped_betas_pberends = function(p, g) {
-#   # Function I created to experiment with grouped random variable creation
-#   # Overly complex
-#   p_g = p/g
-#   
-#   # Generate hyperspace
-#   anchors = matrix(data = runif(g^2,-4,4), nrow = g, ncol = g)
-#   anchors = anchors %>% apply(MARGIN = 2, FUN = cummean)
-#   # magnitudes = rnorm(g)
-#   
-#   # anchors = anchors %*% diag(magnitudes)
-#   group_shift = rnorm(g, mean = 0, sd = 40)  # Increase sd for more spread
-#   
-#   # Jittered values will be of mean anchor and sd magnitude
-#   betas = matrix(NA, nrow = g, ncol = p)
-#   for (group in 0:(g-1)) {
-#     for (beta in 1:p_g) {
-#       mu = anchors[, group + 1]
-#       sigma = 1 #sqrt(sum(mu^2))
-#       beta_g = rnorm(length(mu), mean = mu, sd = sigma)
-#       betas[,group*p_g+beta] = beta_g
-#     }
-#   }
-#   # Bring down to one dimension (1 x p from g x p)
-#   betas = as.tibble(t(matrix(1,1,g) %*% betas))
-#   betas = betas + rep(group_shift, each = p_g)
-#   
-#   betas$group = as.factor(rep(1:g, each = p_g))
-#   colnames(betas)[1] = "beta"
-#   betas$beta = scale(betas$beta, center = F)
-#   return(betas)
-# }
 
 #### BIOMARKER DATA ####
 
@@ -486,7 +439,7 @@ generate_betas = function(p, g, rho, rho_between, seed,
   }
   
   # Generate all betas using block matrix
-  betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full * beta_scale)
+  betas = mvrnorm(1, mu = mu_full, Sigma =  sigma_full)
   
   # Set inactive groups to exactly zero for Betas
   for (group in setdiff(1:g, active_groups)) {
@@ -497,51 +450,56 @@ generate_betas = function(p, g, rho, rho_between, seed,
   print(glue("Mean of betas pre-scaling: {mean(betas)}"))
   print(glue("{c('Lower', 'Upper')} range of beta values pre-scaling: {range(betas)}"))
   
+  # Scale betas 
+  betas = betas * beta_scale
   
-  #  *********** SNR-BASED SCALING *************
-  # Estimate noise variance from baseline distribution
-  n_sim = 1e5
-  
-  X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0.4,  # X_rho kept at 0.4 through code
-                        rho_between = 0, seed = seed, scale = 1, X_plots = F)
-  
-  
-  if (method == "weibull") {
-    baseline_T = stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
-    epsilon_var = var(log(baseline_T))
-  } else if (method == "gompertz") {
-    # TODO: IMPLEMENT GOMPERTZ
-  } else {
-    stop("Method must be 'weibull' or 'gompertz'")
+  if (target_snr != 0) {
+    #  *********** SNR-BASED SCALING *************
+    # Estimate noise variance from baseline distribution
+    n_sim = 1e5
+    
+    X_sample = generate_X(n = n_sim, p = p, g = g, rho = 0.4,  # X_rho kept at 0.4 through code
+                          rho_between = 0, seed = seed, scale = 1, X_plots = F)
+    
+    
+    if (method == "weibull") {
+      baseline_T = stats::rweibull(n_sim, shape = weib_shape, scale = weib_scale)
+      epsilon_var = var(log(baseline_T))
+    } else if (method == "gompertz") {
+      # TODO: IMPLEMENT GOMPERTZ
+    } else {
+      stop("Method must be 'weibull' or 'gompertz'")
+    }
+    
+    
+    linpred_raw = as.matrix(X_sample$X) %*% betas
+    
+    # Set target SNR and rescale
+    target_var_linpred = target_snr * epsilon_var
+    current_var_linpred = var(linpred_raw)
+    
+    
+    scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
+    print(glue("Scale Factor: {scale_factor}"))
+    betas = betas * scale_factor
+    
+    ## Center to preserve baseline average survival
+    # betas = 
+    #   beta_df$beta[beta_df$group %in% active_groups] -
+    #   mean(beta_df$beta[beta_df$group %in% active_groups])
+    #  ************************************
+    linpred_final = as.matrix(X_sample$X) %*% betas
+    print("VARS:")
+    print(var(linpred_final))
+    print(target_var_linpred)
+    achieved_snr = var(linpred_final) / target_var_linpred
+    
+    
+    print(glue("Target SNR: {target_snr}"))
+    print(glue("Epsilon variance: {round(epsilon_var, 4)}"))
+    print(glue("Achieved SNR: {round(achieved_snr, 2) == 1}"))
   }
   
-  
-  linpred_raw = as.matrix(X_sample$X) %*% betas
-  
-  # Set target SNR and rescale
-  target_var_linpred = target_snr * epsilon_var
-  current_var_linpred = var(linpred_raw)
-  
-  
-  scale_factor = as.numeric(sqrt(target_var_linpred / current_var_linpred))
-  print(glue("Scale Factor: {scale_factor}"))
-  betas = betas * scale_factor
-  
-  ## Center to preserve baseline average survival
-  # betas = 
-  #   beta_df$beta[beta_df$group %in% active_groups] -
-  #   mean(beta_df$beta[beta_df$group %in% active_groups])
-  #  ************************************
-  linpred_final = as.matrix(X_sample$X) %*% betas
-  print("VARS:")
-  print(var(linpred_final))
-  print(target_var_linpred)
-  achieved_snr = var(linpred_final) / target_var_linpred
-  
-  
-  print(glue("Target SNR: {target_snr}"))
-  print(glue("Epsilon variance: {round(epsilon_var, 4)}"))
-  print(glue("Achieved SNR: {round(achieved_snr, 2)}"))
   
   
   
@@ -554,23 +512,6 @@ generate_betas = function(p, g, rho, rho_between, seed,
                                       na.rm = TRUE)) + active_hazard,
                           beta))
   
-  
-  # target_variance = 0.1^2  # Target SD as variance for linear predictor
-  # # Because we assume X ~ N(0,1)
-  # # We try to set Var(XB) -> B'Var(X)B -> B'1B -> ||B^2||
-  # 
-  # # Then we set it so some v to rescale this
-  # # v ||B^2|| = target
-  # # v = target / ||B^2||
-  # # sqrt(v) = sqrt(target / ||B^2||)
-  # current_variance = sum(beta_df$beta^2) * 0.005
-  # scale_factor = sqrt(target_variance / current_variance)
-  # beta_df$beta = beta_df$beta * scale_factor
-  
-  
-  
-
-
   
   print(glue("Mean of betas post-scaling: {mean(beta_df$beta)}"))
   print(glue("{c('Lower', 'Upper')} range of beta values post-scaling: {range(beta_df$beta)}"))
@@ -598,8 +539,6 @@ generate_betas = function(p, g, rho, rho_between, seed,
 
 generate_X = function(n, p, g, rho, rho_between, seed = NULL, 
                       scale = 0.5, X_plots = T) {
-  # https://projecteuclid.org/journals/annals-of-applied-statistics/volume-7/issue-3/A-method-for-generating-realistic-correlation-matrices/10.1214/13-AOAS638.full
-  # https://en.wikipedia.org/wiki/Block_matrix#Block_Toeplitz_matrices
   if (!is.null(seed)) set.seed(seed)
   library(MASS)
   stopifnot(p %% g == 0)
@@ -633,7 +572,9 @@ generate_X = function(n, p, g, rho, rho_between, seed = NULL,
   
   # Generate all covariates using block matrix
   # X = matrix(rnorm(n*p, mean = 0, sd = scale), nrow = n, ncol = p)
-  X = mvrnorm(n, mu = rep(0, p), Sigma =  sigma_var * scale)
+  X = mvrnorm(n, mu = rep(0, p), Sigma =  sigma_var)
+  
+  X = X * scale
 
   # Vector indicating group memberships
   group_membership = rep(1:g, each = p_g)

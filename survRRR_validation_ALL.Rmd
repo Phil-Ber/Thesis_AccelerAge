@@ -1,0 +1,448 @@
+---
+title: "survRRR external validation using NEO"
+author: "Philippe A.N. Berends"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Set up project
+
+## Load packages
+
+```{r, results='hide', message=FALSE, warning=FALSE}
+# (Down)load necessary packages
+# install.packages("parallelly") # otherwise other installs will break
+# install.packages("glmnet")
+# install.packages("mstate")
+# install.packages("tidyverse")
+# install.packages("RecordLinkage")
+# install.packages("survminer")
+# install.packages("ggsurvfit")
+# install.packages("future.apply") # Needed to install RecordLinkage
+
+# Load survRRR
+library(tidyverse)
+library(readxl)   # for supplementary excel files
+library(haven) # to read the .dta
+library(glue) # variables in strings
+library(survminer)
+source("penalized_survRRR-main/penalized_survRRR-main/survRRR_functions.R")
+library(survival)
+library(ggsurvfit)  # From survminer package
+source("utils.R") # custom functions for preprocessing
+```
+
+## Load data from secure drive
+
+```{r}
+# Load dataset
+data <- read_dta("//vf-DataSafe/DataSafe$/Div0/ict/survRRR in NEO_2873/NEO_analyse_PPXX_metabolytes_morbidity_RodriquezGirondo_2025-02-18.dta")
+# add id for ease of use
+data <- data %>% mutate(id = 1:nrow(data))
+```
+
+
+# Pre-processing
+
+
+## Select intersection of metabolites between NEO and UK biobank
+
+Use Levenshtein similarity to get similarities between pre-processed strings (removed special characters)
+Afterwards a manual comparison between non-100% similar metabolites
+
+```{r}
+# Select only the metabolite variables
+metabolites = data[64:ncol(data)]
+# grab labels from STATA file
+metabolites_labels = lapply(metabolites, function(x) attributes(x)$label) %>% as.character()
+metabolites_labels_unique = metabolites_labels %>%
+  # Remove the first word (split on first space and take everything after)
+  map_chr(~ sub("^\\S+\\s+", "", .)) %>%
+  unique()
+
+
+# Derive cleaner names from the metabolic columns
+cleaned_labels = sapply(metabolites_labels_unique, function(text) {
+  # remove everything including and after " - "
+  result = sub("\\ - .*$", "", text)
+  # remove words with a dot
+  result = gsub("\\S*\\.\\S*", "", result)
+  2
+  # Clean up any trailing whitespace
+  result = trimws(result)
+  return(result)
+}) %>% unique()
+
+
+pre_meal_metab = metabolites %>% select(matches("_1"))
+post_meal_metab = metabolites %>% select(matches("_3"))
+
+
+
+reference = "~/survRRR validation/supporting_information/SuppInfo_Table1_metabolic_variables_description.xlsx"
+matchframe = exctract_intersect_metabolites(cleaned_labels = cleaned_labels, reference = reference)
+```
+
+Now we have a dataframe called "matchframe" we can use to translate NEO metabolites to UKbiobank
+
+
+
+## Turn dataframe to long format
+
+### Dataset pre-processing
+
+```{r}
+pre_meal_covs = pre_meal_metab[,matchframe$true.match == 1] %>%
+  mutate(id = row_number())
+p = pre_meal_covs %>% ncol() -1 # minus the id column
+
+p # ncol (metabolites)
+
+# number of people in dataset pre-preprocessing
+dim(pre_meal_covs)
+
+
+# Keep patients above age 50, to quote the pen survRRR paper:
+# "Furthermore, participants 305
+# were only included if they were 50 years or older at time of recruitment, as those below 50 years of age 306
+# were considered to be too young to be diagnosed with an age-related disease during the follow-up period."
+pre_meal_covs = pre_meal_covs[data$leeftijd >= 50,]
+dim(pre_meal_covs)
+
+
+# # ------ handle missing data --- (all metabolites have >0.01 missing measurements)
+# 
+# # Remove people with more than 1% missing metabolite measurements
+# # NOTE: Step NOT performed in original paper, but if I don't do this, ALL bio markers
+# # will have more than 1% missing measurements. (e.g., df will be empty in step hereafter)
+# pre_meal_covs <- pre_meal_covs[!(((rowSums(pre_meal_covs %>% is.na()))/p) > 0.06),]
+# 
+# #nrow(pre_meal_covs)
+# 
+# 
+# # Remove metabolites with more than 1% missing (using pre_meal_covs data)
+# pre_meal_covs <- pre_meal_covs[,!(((colSums(pre_meal_covs %>% is.na()))/nrow(pre_meal_covs)) > 0.01)]
+# 
+# ncol(pre_meal_covs) - 1
+# 
+# # Remove people with missing metabolite values
+# pre_meal_covs <- pre_meal_covs[!(((rowSums(pre_meal_covs %>% is.na()))/p) > 0.00),]
+# nrow(pre_meal_covs)
+# 
+
+# NEW: Replace missing metabs with min(metab column)/2
+# - apply column where is na = min column / 2
+
+# Get the min/2 value for each column separately
+pmc_min2 = pre_meal_covs %>% apply(MARGIN = 2, FUN = function(x) min(x, na.rm = T))/2
+
+# Insert these into the missing values on column-level
+pre_meal_covs = pre_meal_covs %>% replace_na(as.list(pmc_min2))
+
+# post_meal_covs = post_meal_metab[,matchframe$true.match == 1] %>%
+#   mutate(id = row_number())
+# data parameters
+# outcomes: CVA, CVD, diabetes, MI, Stroke, TIA, (DEATH)
+
+# Hypertension can not be included due to lack of followup data
+# Intersect between original paper and these data:
+#       TIA, MI, DB, Death
+k = 4
+
+
+# outcome dataframe for diabetes
+outcome_diabetes <- data %>%
+  select(id, visitdd, diab_prev, diabetes2, diabetes2_date, einddatum2) %>%
+  mutate(outcome_DIA_date = ifelse(diab_prev == 0 & diabetes2 == 1, diabetes2_date, 0),
+         outcome_DIA = ifelse(outcome_DIA_date > 0, 1, 0),
+         censored_DIA = ifelse(outcome_DIA == 1, 0, 1)
+         )
+
+# Outcome dataframe for MI
+outcome_MI <- data %>%
+  select(id, visitdd, MI2_Date_1, MI2_Date_2, MI2_Date_3, MI2_inc, einddatum2)
+# Outcome dataframe for Stroke
+outcome_stroke <- data %>%
+  select(id, visitdd, Stroke2_date_1, Stroke2_date_2, Stroke2_date_3, Stroke2_inc, einddatum2) %>%
+  mutate(
+    valid_dates = pmin(Stroke2_date_1, Stroke2_date_2, Stroke2_date_3, na.rm = TRUE),
+    outcome_STR = ifelse(Stroke2_inc == 1 | (!is.na(valid_dates) & valid_dates > visitdd), 1, 0),
+    outcome_STR_time = ifelse(!is.na(valid_dates) & valid_dates > visitdd, valid_dates, NA),
+    censored_STR = ifelse(is.na(Stroke2_date_1) & is.na(Stroke2_date_2) & is.na(Stroke2_date_3), 
+                      1, 
+                      ifelse(!is.na(valid_dates) & valid_dates <= visitdd, 1, 0))
+  ) %>%
+  select(-c(valid_dates))
+
+# Outcome dataframe for TIA
+outcome_TIA <- data %>%
+  select(id, visitdd, TIA2_date_1, TIA2_date_2, TIA2_date_3, TIA2_inc, einddatum2)
+
+# ?outcome dataframe for death? 
+outcome_death <- data %>%
+  select(id, visitdd, einddatum2, eind2) %>% #4 = death
+  mutate(outcome_DTH = ifelse(eind2 == 4, 1, 0),
+         outcome_DTH_date = ifelse(outcome_DTH == 1, einddatum2, 0),
+         censored_DTH = ifelse(outcome_DTH == 1, 0, 1))
+# ts and the ds (censored)
+
+
+# data frame with relevant covariates
+# covariates <- data %>%
+#   select(id, leeftijd, sexe, bmim, bpsystgem, bpdiastgem)
+
+
+# # exclude people who have NA for final date (still in study)
+# outcome_dataframe = outcome_dataframe %>% subset(!is.na(einddatum2))
+# Create empty dataframe to store results
+```
+
+
+```{r}
+head(outcome_death)
+```
+
+```{r}
+head(outcome_MI)
+```
+
+```{r}
+head(outcome_TIA)
+```
+
+DIA outcome is directly taken from the data.
+
+
+### Create long format dataframe
+
+```{r}
+source("utils.R") # custom functions for preprocessing
+
+# For UKB likeness
+pre_dlong = make_long(occasion = 1, data = data, outcome_death = outcome_death, outcome_MI = outcome_MI, outcome_TIA = outcome_TIA, meal_covs = pre_meal_covs, standardize = T, filename = "pre_dlong_standardized_ratios-standardised", log_transform = F)
+
+
+#pre_dlong = make_long(occasion = 1, data = data, outcome_death = outcome_death, outcome_MI = outcome_MI, outcome_TIA = outcome_TIA, meal_covs = pre_meal_covs, standardize = F, filename = "pre_dlong_unstandardized")
+
+# Data consists of only included individuals in dlong
+data_filt = data %>% filter(id %in% (pre_dlong$id %>% unique()))
+# Remove no longer relevant variables to save space
+# rm(pre_meal_metab)
+# rm(outcome_death)
+# rm(outcome_diabetes)
+# rm(outcome_MI)
+# rm(outcome_stroke)
+# rm(outcome_TIA)
+
+head(pre_dlong[,1:7])
+```
+
+## Exploratory data analysis
+
+Various plots that give summary statistics of the individuals from the original dataframe that have been included in the long data.
+
+Distribution of age/gender with years in study
+
+```{r}
+data_filt %>% mutate(sex = case_when(
+  sexe == 1 ~ as.factor("Male"),
+  sexe == 2 ~ as.factor("Female"))
+  ) %>% 
+  pull(sex) %>%
+  table() %>%
+  addmargins(1)
+
+data_filt %>% mutate(sex = case_when(
+  sexe == 1 ~ as.factor("Male"),
+  sexe == 2 ~ as.factor("Female"))
+  ) %>%
+  ggplot(aes(x = leeftijd, fill = sex)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Age", y = "Count", title = "Age at inclusion Distribution by Sex") +
+  theme_minimal()
+
+data_filt %>% mutate(sex = case_when(
+  sexe == 1 ~ as.factor("Male"),
+  sexe == 2 ~ as.factor("Female"))
+  ) %>%
+  ggplot(aes(x = bmim, fill = sex)) +
+  geom_histogram(position = "dodge", binwidth = 1) +
+  labs(x = "BMI", y = "Count", title = "Distribution of BMI by Sex") +
+  theme_minimal()
+
+
+```
+
+```{r}
+# DIA, DTH, MI, TIA
+pre_dlong %>% 
+    mutate(outcome = case_when(
+        trans == 1 ~ "DIA",
+        trans == 2 ~ "Death",
+        trans == 3 ~ "MI",
+        trans == 4 ~ "TIA",
+        trans == 5 ~ "FIRST"
+    )) %>% select(c(outcome, status)) %>% table %>%
+    addmargins(c(1,2))
+
+# Create the plot with Kaplan-Meier curves for each outcome
+
+survfit = survfit2(Surv(Tstart, Tstop, status) ~ outcome, data = pre_dlong %>% 
+    mutate(outcome = case_when(
+        trans == 1 ~ "DIA",
+        trans == 2 ~ "Death",
+        trans == 3 ~ "MI",
+        trans == 4 ~ "TIA",
+        trans == 5 ~ "FIRST"
+    )))
+p = ggsurvfit(survfit) +
+  xlab("Age")
+p
+```
+
+
+What was the first event on an individual-level?
+
+```{r}
+# Look at trans 1, 2, 3, 4
+tabs = pre_dlong %>% filter(status == 1, trans != 5) %>% # The event should have occurred
+  group_by(id) %>% # Look at individual-level
+  slice_min(Tstop, n = 1) %>% # Take the first event based on Tstop (time since start)
+  select(trans) %>% # Look at events 1, 2 3, 4 ("DIA", "Death", "MI", "TIA")
+  table %>%
+  colSums() %>% # Count how often the event in question was the first (each event a column)
+  as.data.frame() %>% t # Transpose because R likes to make rows
+
+colnames(tabs) = c("DIA", "Death", "MI", "TIA")
+rownames(tabs) = "first_event"
+tabs
+```
+
+# External validation
+
+## Import UKbiobank data
+
+```{r}
+# import alphas and betas from UKBiobank model
+uk_alpha = read_excel("~/survRRR validation/supporting_information/SuppInfo_Table6_Alpha_hat.xlsx")
+uk_beta = read_excel("~/survRRR validation/supporting_information/SuppInfo_Table5_Beta_hat.xlsx")
+
+# remove _. from name
+pre_dlong <- pre_dlong %>%
+  rename_with(~ gsub("_\\d+$", "", .), matches("_\\d+$"))
+
+# small dataframe to remap names with
+name_mapping <- setNames(
+  matchframe$Metabolic.variable,  # replace by
+  matchframe$column_name # from dlong
+)
+
+columns_to_rename <- intersect(names(pre_dlong), names(name_mapping))
+pre_dlong <- pre_dlong %>%
+  rename_at(vars(columns_to_rename), ~ name_mapping[.])
+
+names(pre_dlong[,8:ncol(pre_dlong)])  %>% length
+uk_alpha$metabolic_variable %>% length
+
+intersect(names(pre_dlong), uk_alpha$metabolic_variable) %>% length
+
+# these metabolites don't occur in the alphas
+setdiff(names(pre_dlong), uk_alpha$metabolic_variable) # 7 don't occur, as survRRR was not fit on these! I checked and the paper confirms it
+
+# thus we exclude them from the long frame
+pre_dlong <- pre_dlong %>% select(-setdiff(names(pre_dlong), uk_alpha$metabolic_variable)[9:length(setdiff(names(pre_dlong), uk_alpha$metabolic_variable))])
+
+setdiff(names(pre_dlong),c("status", "Tstart", "Tstop", "trans", 
+                             "from", "to", "id", "X")) %>% length()
+
+```
+
+## Calculate C-index
+
+```{r}
+usable_uk_beta = uk_beta[uk_beta$metabolic_variable %in% names(pre_dlong),]
+usable_uk_alpha = uk_alpha[uk_alpha$metabolic_variable %in% names(pre_dlong),]
+outcome_map = c("diabetes", "death", "mi", "tia", "first")
+
+
+
+# Calculate C-index for each outcome
+c_indexes = list()
+for (i in 1:length(outcome_map)) {
+  c_indexes[[outcome_map[i]]] = calculate_cindex(pre_dlong, i, usable_uk_alpha, outcome_map)
+}
+```
+
+ ## Compare with MetaboHealth score
+
+```{r}
+# For MetaboHealth (log transformed)
+pre_dlong_MH = make_long(occasion = 1, data = data, outcome_death = outcome_death, outcome_MI = outcome_MI, outcome_TIA = outcome_TIA, meal_covs = pre_meal_covs, standardize = T, filename = "pre_dlong_standardized_log_ratios-standardised", log_transform = T)
+
+# remove _. from name
+pre_dlong_MH <- pre_dlong_MH %>%
+  rename_with(~ gsub("_\\d+$", "", .), matches("_\\d+$"))
+
+
+# select the correct biomarker columns
+# XXL-VLDL-L, S-HDL-L, VLDL-D, PUFA/FA, Glc, Lac, His, Ile, Leu, Val, Phe, AcAce, ALb, GlycA
+
+# get hazard ratios from table at: https://www.nature.com/articles/s41467-019-11311-9/tables/2
+metabohealth = data.frame(metabolic_variable = c('XXL-VLDL-L', 'S-HDL-L', 'VLDL-D', 'PUFA/FA', 'Glc', 'Lac', 'His', 'Ile', 'Leu', 'Val', 'Phe', 'AcAce', 'ALb', 'GlycA'), coefficient = c(0.80, 0.87, 0.85, 0.78, 1.16, 1.06, 0.93, 1.23, 0.82, 0.87, 1.13, 1.08, 0.89, 1.32))
+
+# transform to log hazards
+metabohealth$coefficient = log(metabohealth$coefficient)
+
+# Select right biomarkers from long frame
+metabohealth_biomarkers = pre_dlong_MH %>% select(c(id, Tstart, Tstop, status, from, to, trans, XXLVLDLL, SHDLL,
+                                                 VLDLD, PUFAFA, Glc, Lac, His,
+                                                 Ile, Leu, Val, Phe,
+                                                 Alb, Gp)) # Acetoacetate not available in NEO
+
+# remove AcAce, not available in NEO
+metabohealth = metabohealth[-12,]
+
+# set names equal to MetaboHealth
+names(metabohealth_biomarkers)[8:ncol(metabohealth_biomarkers)] = metabohealth$metabolic_variable
+
+# Calculate C-index
+c_indexes_MH = list()
+for (i in 1:length(outcome_map)) {
+  c_indexes_MH[[outcome_map[i]]] = calculate_cindex(metabohealth_biomarkers, i, metabohealth, outcome_map)
+}
+
+c_indexes_MH
+
+```
+
+
+# Correlation linpred survRRR with Metabohealth
+
+
+```{r}
+# unique covariates and individuals
+corrset_S = pre_dlong %>% distinct(id, .keep_all = T)
+corrset_M = metabohealth_biomarkers %>% distinct(id, .keep_all = T)
+
+lps_survRRR = as.vector(as.matrix(
+  corrset_S[, intersect(
+    colnames(corrset_S), usable_uk_alpha$metabolic_variable)
+    ]) %*% usable_uk_alpha$coefficient)
+
+lps_MetaboHealth = as.vector(as.matrix(
+  corrset_M[, intersect(
+    colnames(corrset_M), metabohealth$metabolic_variable)
+    ]) %*% metabohealth$coefficient)
+
+library(ggpubr)
+corrset_All = data.frame(MetaboHealth = lps_MetaboHealth, survRRR = lps_survRRR)
+corrset_All %>% ggplot(aes(x = MetaboHealth, y = survRRR)) +
+  geom_point() +
+  geom_abline(, slope = 1) +
+  geom_smooth(method = lm)+
+  stat_cor(method = "pearson") +
+  theme_minimal() +
+  labs(title = "Correlation between MetaboHealth and survRRR linear predictors")
+```
