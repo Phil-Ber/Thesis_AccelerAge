@@ -1207,7 +1207,7 @@ options(device = getOption("device"))
 
 ## High dimensional M = 1
 ```{r eval=FALSE, include=FALSE}
-run_grid_experiments_mc(n_grid = 500, p_grid = 2000, g_grid = 100, non_zero_grid = c(0.25, 1), M = 1, experiment_name = "high-dim-final_normal", beta_prior = "normal", seed_base = 14)
+run_grid_experiments_mc(n_grid = 500, p_grid = 2000, g_grid = 100, non_zero_grid = c(0.25, 1), M = 1, experiment_name = "high-dim-final_normal", beta_prior = "normal", seed_base = 14, pop_n = 100000)
 ```
 View results
 ```{r}
